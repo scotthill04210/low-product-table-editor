@@ -181,6 +181,17 @@
 	border: 1px solid #c3c4c7;
 }
 
+.low-pte-grid .tabulator-cell[tabulator-field="_select"] {
+	overflow: visible;
+	text-overflow: clip;
+}
+
+.low-pte-grid .low-pte-select,
+.low-pte-grid .low-pte-select-page {
+	margin: 0;
+	position: static;
+}
+
 .low-pte-product-cell {
 	display: inline-block;
 	max-width: calc(100% - 28px);
@@ -471,4 +482,84 @@
 	max-height: 320px;
 	overflow: auto;
 	white-space: pre-wrap;
+}
+
+.low-pte-select-banner[hidden],
+.low-pte-select-toolbar[hidden],
+.low-pte-select-blocked[hidden],
+.low-pte-bulk-error[hidden] {
+	display: none;
+}
+
+.low-pte-select-banner,
+.low-pte-select-toolbar {
+	align-items: center;
+	background: #f0f6fc;
+	border: 1px solid #c3c4c7;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin: 12px 0;
+	padding: 10px 12px;
+}
+
+.low-pte-select-banner p,
+.low-pte-select-blocked {
+	margin: 0;
+}
+
+.low-pte-bulk-card {
+	max-width: 960px;
+	width: calc(100% - 32px);
+}
+
+.low-pte-bulk-form fieldset {
+	border: 0;
+	margin: 12px 0;
+	padding: 0;
+}
+
+.low-pte-bulk-form label {
+	display: flex;
+	gap: 8px;
+	margin: 4px 0;
+}
+
+.low-pte-bulk-value-row {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+}
+
+.low-pte-bulk-error {
+	color: #b32d2e;
+	margin: 4px 0 0;
+}
+
+.low-pte-bulk-table-wrap {
+	max-height: 360px;
+	overflow: auto;
+}
+
+.low-pte-bulk-table {
+	border-collapse: collapse;
+	width: 100%;
+}
+
+.low-pte-bulk-table th,
+.low-pte-bulk-table td {
+	border-bottom: 1px solid #dcdcde;
+	padding: 6px 8px;
+	text-align: left;
+	vertical-align: top;
+}
+
+.low-pte-bulk-problem {
+	background: #fcf0f1;
+}
+
+.low-pte-bulk-card progress {
+	display: block;
+	margin: 12px 0;
+	width: 100%;
 }

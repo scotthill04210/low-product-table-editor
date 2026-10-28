@@ -63,6 +63,48 @@ class Log_Repository {
 	}
 
 	/**
+	 * Whether a bulk chunk may append to this batch.
+	 *
+	 * An unused id is allowed. An existing batch is allowed only when every
+	 * row belongs to this user and was written by a bulk action.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string $batch_id Batch identifier.
+	 * @param int    $user_id  Current user.
+	 * @return string empty, ok, or foreign.
+	 */
+	public function bulk_batch_status( string $batch_id, int $user_id ): string {
+		global $wpdb;
+
+		$table = $this->table();
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Table name is the current site prefix.
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT COUNT(*) AS total_rows, SUM(CASE WHEN user_id = %d AND source = 'bulk' THEN 1 ELSE 0 END) AS owned_rows FROM {$table} WHERE batch_id = %s",
+				$user_id,
+				$batch_id
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$total = is_array( $row ) ? (int) $row['total_rows'] : 0;
+		$owned = is_array( $row ) ? (int) $row['owned_rows'] : 0;
+
+		if ( $total < 1 ) {
+			return 'empty';
+		}
+
+		if ( $owned === $total ) {
+			return 'ok';
+		}
+
+		return 'foreign';
+	}
+
+	/**
 	 * Insert log rows for one batch.
 	 *
 	 * @since 0.1.1

@@ -49,6 +49,19 @@
 	var toastTimer = 0;
 	var saving = false;
 	var dirty = new Map();
+	var selectedIds = new Set();
+	var selectionMode = 'ids';
+	var selectionNote = '';
+	var pageTotal = 0;
+	var pageCount = 0;
+	var selectionBanner;
+	var selectionBannerText;
+	var selectionToolbar;
+	var selectionCount;
+	var selectionButton;
+	var selectionBlocked;
+	var selectionMatchButton;
+	var selectionClearButton;
 	var cellMessages = new Map();
 	var conflicts = new Map();
 	var rowStatus = new Map();
@@ -83,6 +96,7 @@
 		syncHistoryControls();
 		applyTab();
 		if (tableChanged) {
+			clearSelectionForNavigation();
 			load();
 		}
 		if (state.tab === 'history' && (historyChanged || tabChanged)) {
@@ -303,6 +317,7 @@
 
 		toolbar.appendChild(actions);
 		tablePanel.appendChild(toolbar);
+		buildSelectionBar();
 
 		messageEl = document.createElement('div');
 		messageEl.className = 'low-pte-message';
@@ -511,6 +526,7 @@
 	}
 
 	function commit(mode) {
+		clearSelectionForNavigation();
 		writeUrl(mode);
 		load();
 	}
@@ -657,6 +673,8 @@
 		var items = Array.isArray(body.items) ? body.items : [];
 		var total = Number(body.total) || 0;
 		var totalPages = Number(body.total_pages) || 0;
+		pageTotal = total;
+		pageCount = totalPages;
 
 		skeletonEl.hidden = true;
 		mount.setAttribute('aria-busy', 'false');
@@ -687,6 +705,7 @@
 				renderVertical: 'virtual',
 				dataTree: true,
 				dataTreeChildField: 'children',
+				dataTreeElementColumn: 'name',
 				dataTreeStartExpanded: true,
 				selectableRows: false,
 				selectableRange: true,
@@ -705,6 +724,7 @@
 					paintRow(row);
 				},
 				columns: [
+					selectionColumn(),
 					column(t('columnProduct', 'Product'), 'name', 360, 2, true, productFormatter, textEditor),
 					column(t('columnSoldBy', 'Sold By'), 'sold_by', 120, 1, false, textFormatter),
 					column(t('columnRegularPrice', 'Regular price'), 'regular_price', 120, 1, false, textFormatter, textEditor),
@@ -721,11 +741,270 @@
 			});
 
 			setTreeButtons(true);
+			updateSelectionUi();
 		} catch (error) {
 			table = null;
 			gridEl.replaceChildren();
 			showError();
 		}
+	}
+
+	function buildSelectionBar() {
+		selectionBanner = document.createElement('div');
+		selectionBanner.className = 'low-pte-select-banner';
+		selectionBanner.hidden = true;
+		selectionBannerText = document.createElement('p');
+		selectionBanner.appendChild(selectionBannerText);
+		selectionMatchButton = document.createElement('button');
+		selectionMatchButton.type = 'button';
+		selectionMatchButton.className = 'button-link';
+		selectionMatchButton.textContent = t('selectAllMatching', 'Select all matching');
+		selectionMatchButton.addEventListener('click', function () {
+			selectionMode = 'filter';
+			selectionNote = '';
+			updateSelectionUi();
+			refreshSelectionChecks();
+		});
+		selectionClearButton = document.createElement('button');
+		selectionClearButton.type = 'button';
+		selectionClearButton.className = 'button-link';
+		selectionClearButton.textContent = t('clearSelection', 'Clear selection');
+		selectionClearButton.addEventListener('click', function () {
+			selectedIds.clear();
+			selectionMode = 'ids';
+			selectionNote = '';
+			updateSelectionUi();
+			refreshSelectionChecks();
+		});
+		selectionBanner.appendChild(selectionMatchButton);
+		selectionBanner.appendChild(selectionClearButton);
+		tablePanel.appendChild(selectionBanner);
+
+		selectionToolbar = document.createElement('div');
+		selectionToolbar.className = 'low-pte-select-toolbar';
+		selectionToolbar.hidden = true;
+		selectionCount = document.createElement('span');
+		selectionButton = document.createElement('button');
+		selectionButton.type = 'button';
+		selectionButton.className = 'button button-primary';
+		selectionButton.textContent = t('bulkPrice', 'Bulk price action');
+		selectionButton.addEventListener('click', function () {
+			if (window.LOW_PTE_BULK && !selectionButton.disabled) {
+				window.LOW_PTE_BULK.open(selectionButton);
+			}
+		});
+		selectionBlocked = document.createElement('p');
+		selectionBlocked.className = 'low-pte-select-blocked';
+		selectionBlocked.hidden = true;
+		selectionBlocked.textContent = t('bulkBlocked', 'Save or discard changes before using a bulk action.');
+		selectionToolbar.appendChild(selectionCount);
+		selectionToolbar.appendChild(selectionButton);
+		selectionToolbar.appendChild(selectionBlocked);
+		tablePanel.appendChild(selectionToolbar);
+	}
+
+	function clearSelectionForNavigation() {
+		if (selectedIds.size === 0 && selectionMode !== 'filter') {
+			return;
+		}
+		selectedIds.clear();
+		selectionMode = 'ids';
+		selectionNote = t('selectionCleared', 'The selection was cleared because the page or filters changed.');
+		updateSelectionUi();
+	}
+
+	function pageTargetIds() {
+		var ids = [];
+		if (!table) {
+			return ids;
+		}
+		table.getData().forEach(function (row) {
+			if (row.type === 'simple') {
+				ids.push(row.id);
+			}
+			(row.children || []).forEach(function (child) {
+				ids.push(child.id);
+			});
+		});
+		return ids;
+	}
+
+	function rowTargetIds(data) {
+		if (!data) {
+			return [];
+		}
+		if (data.type === 'variable') {
+			return (data.children || []).map(function (child) {
+				return child.id;
+			});
+		}
+		if (data.type === 'simple' || data.type === 'variation') {
+			return [data.id];
+		}
+		return [];
+	}
+
+	function isRowSelected(id) {
+		return selectionMode === 'filter' || selectedIds.has(id);
+	}
+
+	function setPageSelection(on) {
+		if (selectionMode === 'filter' && !on) {
+			selectionMode = 'ids';
+			pageTargetIds().forEach(function (id) {
+				selectedIds.add(id);
+			});
+		}
+		pageTargetIds().forEach(function (id) {
+			if (on) {
+				selectedIds.add(id);
+			} else {
+				selectedIds.delete(id);
+			}
+		});
+		if (!on) {
+			selectionMode = 'ids';
+		}
+		selectionNote = '';
+	}
+
+	function toggleRow(data, on) {
+		var ids = rowTargetIds(data);
+		if (selectionMode === 'filter') {
+			selectionMode = 'ids';
+			pageTargetIds().forEach(function (id) {
+				selectedIds.add(id);
+			});
+		}
+		ids.forEach(function (id) {
+			if (on) {
+				selectedIds.add(id);
+			} else {
+				selectedIds.delete(id);
+			}
+		});
+		selectionNote = '';
+	}
+
+	function selectionColumn() {
+		return {
+			title: '',
+			field: '_select',
+			width: 48,
+			hozAlign: 'center',
+			headerSort: false,
+			frozen: true,
+			titleFormatter: function () {
+				var input = document.createElement('input');
+				input.type = 'checkbox';
+				input.className = 'low-pte-select-page';
+				input.tabIndex = 0;
+				input.setAttribute('aria-label', t('selectPage', 'Select all rows on this page'));
+				var ids = pageTargetIds();
+				var selected = ids.filter(isRowSelected).length;
+				input.checked = ids.length > 0 && (selectionMode === 'filter' || selected === ids.length);
+				input.indeterminate = selectionMode !== 'filter' && selected > 0 && selected < ids.length;
+				input.addEventListener('mousedown', function (event) {
+					event.stopPropagation();
+				});
+				input.addEventListener('change', function () {
+					setPageSelection(input.checked);
+					refreshSelectionChecks();
+					updateSelectionUi();
+				});
+				return input;
+			},
+			formatter: function (cell) {
+				var data = cell.getRow().getData();
+				var ids = rowTargetIds(data);
+				var input = document.createElement('input');
+				input.type = 'checkbox';
+				input.className = 'low-pte-select';
+				input.tabIndex = 0;
+				input.setAttribute('aria-label', t('selectRow', 'Select row'));
+				var selected = ids.filter(isRowSelected).length;
+				input.checked = ids.length > 0 && selected === ids.length;
+				input.indeterminate = selected > 0 && selected < ids.length;
+				input.disabled = ids.length === 0;
+				input.addEventListener('mousedown', function (event) {
+					event.stopPropagation();
+				});
+				input.addEventListener('click', function (event) {
+					event.stopPropagation();
+				});
+				input.addEventListener('change', function () {
+					toggleRow(data, input.checked);
+					refreshSelectionChecks();
+					updateSelectionUi();
+				});
+				return input;
+			}
+		};
+	}
+
+	function refreshSelectionChecks() {
+		if (!table) {
+			return;
+		}
+		table.getRows().forEach(function (row) {
+			reformatSelectionRow(row);
+			if (typeof row.getTreeChildren === 'function') {
+				row.getTreeChildren().forEach(reformatSelectionRow);
+			}
+		});
+		syncHeaderCheckbox();
+	}
+
+	function reformatSelectionRow(row) {
+		try {
+			row.reformat();
+		} catch (error) {
+			return;
+		}
+	}
+
+	function syncHeaderCheckbox() {
+		if (!gridEl) {
+			return;
+		}
+		var input = gridEl.querySelector('.low-pte-select-page');
+		if (!input) {
+			return;
+		}
+		var ids = pageTargetIds();
+		var selected = ids.filter(isRowSelected).length;
+		input.checked = ids.length > 0 && (selectionMode === 'filter' || selected === ids.length);
+		input.indeterminate = selectionMode !== 'filter' && selected > 0 && selected < ids.length;
+	}
+
+	function updateSelectionUi() {
+		if (!selectionToolbar) {
+			return;
+		}
+		var count = selectionMode === 'filter' ? pageTargetIds().length : selectedIds.size;
+		var active = selectionMode === 'filter' || selectedIds.size > 0;
+		selectionToolbar.hidden = !active;
+		selectionCount.textContent = selectionMode === 'filter'
+			? t('allMatchingSelected', 'All items matching the current filters are selected')
+			: t('itemsSelected', '%s items selected').replace('%s', String(selectedIds.size));
+		var blocked = dirty.size > 0;
+		selectionButton.disabled = !active || blocked;
+		selectionBlocked.hidden = !blocked || !active;
+		var pageIds = pageTargetIds();
+		var showPageBanner = selectionMode !== 'filter' && pageCount > 1 && pageIds.length > 0 && pageIds.every(isRowSelected);
+		selectionBanner.hidden = !showPageBanner && !selectionNote;
+		if (selectionMatchButton) {
+			selectionMatchButton.hidden = !showPageBanner;
+			selectionClearButton.hidden = !showPageBanner;
+		}
+		if (showPageBanner) {
+			selectionBannerText.textContent = t('selectPageBanner', '%1$s items on this page are selected. Select all %2$s items matching the current filters.')
+				.replace('%1$s', String(count))
+				.replace('%2$s', String(pageTotal));
+		} else {
+			selectionBannerText.textContent = selectionNote;
+		}
+		syncHeaderCheckbox();
 	}
 
 	function column(title, field, minWidth, grow, frozen, formatter, editor) {
@@ -1424,6 +1703,7 @@
 		saveCount.textContent = template.replace('%s', String(count));
 		saveButton.disabled = saving || count === 0;
 		discardButton.disabled = saving;
+		updateSelectionUi();
 	}
 
 	function discardChanges() {
@@ -2805,4 +3085,34 @@
 		};
 		return Object.prototype.hasOwnProperty.call(map, fieldName) ? map[fieldName] : String(fieldName || '');
 	}
+
+	window.LOW_PTE_HOST = {
+		t: t,
+		restRoot: restRoot,
+		nonce: function () {
+			return config.nonce || '';
+		},
+		filters: function () {
+			return {
+				search: state.search,
+				category: state.category,
+				type: state.type,
+				stock_status: state.stock_status,
+				status: state.status
+			};
+		},
+		selection: function () {
+			if (selectionMode === 'filter') {
+				return { mode: 'filter', filters: this.filters() };
+			}
+			return { mode: 'ids', ids: Array.from(selectedIds) };
+		},
+		dirty: function () {
+			return dirty.size > 0;
+		},
+		reload: function () {
+			load();
+		},
+		toast: showToast
+	};
 }());

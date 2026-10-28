@@ -40,6 +40,13 @@ class Rest_Controller {
 	private float $time_start = 0.0;
 
 	/**
+	 * Bulk price actions.
+	 *
+	 * @var Bulk_Service
+	 */
+	private Bulk_Service $bulk;
+
+	/**
 	 * Bind the product service.
 	 *
 	 * @since 0.1.0
@@ -48,6 +55,7 @@ class Rest_Controller {
 	 */
 	public function __construct( Product_Service $products ) {
 		$this->products = $products;
+		$this->bulk     = new Bulk_Service( $products );
 	}
 
 	/**
@@ -118,6 +126,125 @@ class Rest_Controller {
 				'permission_callback' => array( $this, 'permissions_check' ),
 			)
 		);
+
+		register_rest_route(
+			'low-pte/v1',
+			'/bulk/preview',
+			array(
+				'methods'             => 'POST',
+				'callback'            => array( $this, 'preview_bulk' ),
+				'permission_callback' => array( $this, 'permissions_check' ),
+			)
+		);
+
+		register_rest_route(
+			'low-pte/v1',
+			'/bulk/apply',
+			array(
+				'methods'             => 'POST',
+				'callback'            => array( $this, 'apply_bulk' ),
+				'permission_callback' => array( $this, 'permissions_check' ),
+			)
+		);
+	}
+
+	/**
+	 * Preview a bulk price action without writing.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function preview_bulk( \WP_REST_Request $request ): \WP_REST_Response|\WP_Error {
+		$body = $request->get_json_params();
+		if ( ! is_array( $body ) || ! isset( $body['selection'], $body['action'] ) || ! is_array( $body['selection'] ) || ! is_array( $body['action'] ) ) {
+			return new \WP_Error(
+				'rest_invalid_param',
+				__( 'A selection and an action are required.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$result = $this->bulk->preview( $body['selection'], $body['action'] );
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return rest_ensure_response( $result );
+	}
+
+	/**
+	 * Apply one chunk of a bulk price action.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function apply_bulk( \WP_REST_Request $request ): \WP_REST_Response|\WP_Error {
+		$body = $request->get_json_params();
+		if ( ! is_array( $body ) || ! isset( $body['selection'], $body['action'] ) || ! is_array( $body['selection'] ) || ! is_array( $body['action'] ) ) {
+			return new \WP_Error(
+				'rest_invalid_param',
+				__( 'A selection and an action are required.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$batch_id = isset( $body['batch_id'] ) && is_string( $body['batch_id'] ) ? strtolower( trim( $body['batch_id'] ) ) : '';
+		if ( ! preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/', $batch_id ) ) {
+			return new \WP_Error(
+				'rest_invalid_param',
+				__( 'Batch ID is not valid.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$chunk_index = $body['chunk_index'] ?? null;
+		$chunk_total = $body['chunk_total'] ?? null;
+		if ( ! is_int( $chunk_index ) || ! is_int( $chunk_total ) || $chunk_index < 0 || $chunk_total < 1 || $chunk_index >= $chunk_total ) {
+			return new \WP_Error(
+				'rest_invalid_param',
+				__( 'Chunk index is not valid.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$selection = $body['selection'];
+		$mode      = isset( $selection['mode'] ) ? (string) $selection['mode'] : '';
+		$ids       = isset( $selection['ids'] ) && is_array( $selection['ids'] ) ? $selection['ids'] : array();
+		if ( 'ids' !== $mode ) {
+			return new \WP_Error(
+				'rest_invalid_param',
+				__( 'Apply a list of product IDs.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		if ( 25 < count( $ids ) ) {
+			return new \WP_Error(
+				'low_pte_too_many_items',
+				__( 'A bulk request can include at most 25 items.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$repository = new Log_Repository();
+		if ( 'foreign' === $repository->bulk_batch_status( $batch_id, get_current_user_id() ) ) {
+			return new \WP_Error(
+				'low_pte_batch_forbidden',
+				__( 'This batch belongs to another change.', 'low-product-table-editor' ),
+				array( 'status' => 403 )
+			);
+		}
+
+		$result = $this->bulk->apply( $batch_id, $ids, $body['action'] );
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return rest_ensure_response( $result );
 	}
 
 	/**

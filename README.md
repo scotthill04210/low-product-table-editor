@@ -2,7 +2,7 @@
 
 Admin-only WordPress plugin that edits WooCommerce products and variations in one spreadsheet-style table.
 
-**0.1.1** is the first published build. It adds the Products > Table Editor screen and updates from GitHub Releases. The working tree adds the product grid, inline editing, and the audit log. Bulk price changes and undo are later releases. The published 0.1.1 zip does not include the grid.
+**0.1.1** is the first published build. It adds the Products > Table Editor screen and updates from GitHub Releases. The working tree adds the product grid, inline editing, the audit log, and bulk price changes. Undo is a later release. The published 0.1.1 zip does not include the grid.
 
 ## Product grid
 
@@ -11,6 +11,10 @@ Parent products and their variations render in one Tabulator table. `dataTree` i
 ## History
 
 The History tab lists each Save as one batch. Open a batch to see the old and new value of every field that changed. Log settings at the bottom of that tab set how long entries are kept. A daily task deletes rows older than that. The log table stays when the plugin is deleted unless "Delete the log table when the plugin is deleted" is checked.
+
+## Bulk prices
+
+Select simple products or variations, then choose Bulk price action. Preview shows the new price for every item before anything is saved. Apply sends the selected items in groups of 25. Increase and decrease skip an empty price and list it in the report. A result below zero, a regular price of zero, or a sale price that is not below the regular price is reported as an error and is not saved.
 
 ## Requirements
 

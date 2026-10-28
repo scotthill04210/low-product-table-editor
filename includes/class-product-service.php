@@ -19,6 +19,13 @@ defined( 'ABSPATH' ) || exit;
 class Product_Service {
 
 	/**
+	 * Menu orders captured before the first save of a parent family.
+	 *
+	 * @var array<int, array<int, int>>
+	 */
+	private array $menu_order_snapshot = array();
+
+	/**
 	 * Term names keyed by taxonomy and slug.
 	 *
 	 * @var array<string, string>
@@ -1095,7 +1102,7 @@ class Product_Service {
 		try {
 			$changed = $this->apply_fields( $product, $checked['values'] );
 			if ( $changed ) {
-				$product->save();
+				$this->save_product( $product );
 			}
 		} catch ( \WC_Data_Exception $exception ) {
 			$reloaded = $this->reload_product( $id );
@@ -1996,5 +2003,286 @@ class Product_Service {
 			$product->set_regular_price( $value );
 		}
 		remove_filter( 'woocommerce_price_num_decimals', $filter, 9999 );
+	}
+
+	/**
+	 * Parent product IDs matching the grid filters, with no paging.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param array<string, mixed> $filters search, category, type, stock_status, status.
+	 * @return array<int, int>
+	 */
+	public function parent_ids_for_filters( array $filters ): array {
+		$search   = $this->search_term( $filters['search'] ?? '' );
+		$category = sanitize_title( is_scalar( $filters['category'] ?? '' ) ? (string) $filters['category'] : '' );
+		$type     = $this->choice( $filters['type'] ?? '', array( 'simple', 'variable' ) );
+		$stock    = $this->choice( $filters['stock_status'] ?? '', array( 'instock', 'outofstock', 'onbackorder' ) );
+		$status   = $this->choice( $filters['status'] ?? '', array( 'publish', 'draft', 'private', 'pending' ) );
+
+		$query = array(
+			'status'  => '' !== $status ? array( $status ) : array( 'publish', 'draft', 'private', 'pending' ),
+			'type'    => '' !== $type ? array( $type ) : array( 'simple', 'variable' ),
+			'limit'   => -1,
+			'return'  => 'ids',
+			'orderby' => 'title',
+			'order'   => 'ASC',
+		);
+
+		if ( '' !== $category ) {
+			$query['category'] = array( $category );
+		}
+
+		if ( '' !== $stock ) {
+			$query['stock_status'] = $stock;
+		}
+
+		if ( '' !== $search ) {
+			$include = $this->parent_ids_for_search( $search );
+			if ( array() === $include ) {
+				return array();
+			}
+			$query['include'] = $include;
+		}
+
+		$result = wc_get_products( $query );
+		$ids    = array_map( 'absint', is_array( $result ) ? $result : array() );
+
+		return array_values(
+			array_filter(
+				$ids,
+				static function ( int $id ): bool {
+					return $id > 0;
+				}
+			)
+		);
+	}
+
+	/**
+	 * Variations belonging to the given parents, in menu order.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param array<int, int> $parent_ids Parent product IDs.
+	 * @return array<int, int>
+	 */
+	public function variation_ids_for_parent_products( array $parent_ids ): array {
+		return $this->variation_ids_for_parents( $parent_ids );
+	}
+
+	/**
+	 * Prime post caches for a bulk read.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param array<int, int> $ids Product and variation IDs.
+	 * @return void
+	 */
+	public function prime_bulk_caches( array $ids ): void {
+		$this->prime_caches( $ids );
+	}
+
+	/**
+	 * Prime Sold By term names for a set of variations.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param array<int, \WC_Product> $products Variations.
+	 * @return void
+	 */
+	public function prime_bulk_attributes( array $products ): void {
+		$this->prime_attribute_terms( $products );
+	}
+
+	/**
+	 * Name, Sold By, and raw prices for one priced item.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Simple product or variation.
+	 * @return array<string, mixed>
+	 */
+	public function bulk_display( \WC_Product $product ): array {
+		$details = $this->variation_details( $product );
+		$name    = $details['name'];
+		if ( $product->is_type( 'variation' ) && '' !== $details['variation_label'] ) {
+			$name .= ' ' . $details['variation_label'];
+		}
+
+		return array(
+			'id'            => $product->get_id(),
+			'parent_id'     => $product->is_type( 'variation' ) ? $product->get_parent_id() : 0,
+			'name'          => $name,
+			'sold_by'       => $details['sold_by'],
+			'regular_price' => $this->price_value( $product, 'regular' ),
+			'sale_price'    => $this->price_value( $product, 'sale' ),
+			'type'          => $product->get_type(),
+		);
+	}
+
+	/**
+	 * Store one price through the CRUD setter, keeping 4 decimal places.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @param string      $which   regular or sale.
+	 * @param string      $value   Price text.
+	 * @return void
+	 */
+	public function assign_price( \WC_Product $product, string $which, string $value ): void {
+		$this->set_price( $product, $which, $value );
+	}
+
+	/**
+	 * Save a product and put menu_order back if WooCommerce rewrites it.
+	 *
+	 * A variation save updates the post because date_modified changes, and
+	 * that update stores menu_order from the in-memory product. The default
+	 * is 0, so a save can move a variation to the front of the list.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @return void
+	 */
+	public function save_product( \WC_Product $product ): void {
+		$orders     = $this->menu_orders_for_product( $product );
+		$product_id = $product->get_id();
+		if ( isset( $orders[ $product_id ] ) ) {
+			$product->set_menu_order( $orders[ $product_id ] );
+		}
+		$product->save();
+		$this->restore_menu_orders( $orders );
+	}
+
+	/**
+	 * Stored menu_order for a parent and its variations.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param array<int, int> $parent_ids Parent product IDs.
+	 * @return array<int, int>
+	 */
+	public function menu_orders_for_parents( array $parent_ids ): array {
+		$ids = array();
+		foreach ( $parent_ids as $parent_id ) {
+			$parent_id = (int) $parent_id;
+			if ( $parent_id < 1 ) {
+				continue;
+			}
+			$ids[] = $parent_id;
+			$ids   = array_merge( $ids, $this->variation_ids_for_parent_products( array( $parent_id ) ) );
+		}
+		return $this->menu_orders_for_posts( $ids );
+	}
+
+	/**
+	 * Write menu_order values back when a save changed them.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param array<int, int> $orders Post ID to menu_order.
+	 * @return void
+	 */
+	public function restore_menu_orders( array $orders ): void {
+		foreach ( $orders as $post_id => $menu_order ) {
+			$this->restore_menu_order( (int) $post_id, (int) $menu_order );
+		}
+	}
+
+	/**
+	 * Menu orders for one product and, for a variation, its family.
+	 *
+	 * The first lookup in a request is kept so a later save cannot treat a
+	 * value this request already changed as the original.
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @return array<int, int>
+	 */
+	private function menu_orders_for_product( \WC_Product $product ): array {
+		$product_id = $product->get_id();
+		$parent_id  = 0;
+		if ( $product->is_type( 'variation' ) ) {
+			$parent_id = $product->get_parent_id();
+		} elseif ( $product->is_type( 'variable' ) ) {
+			$parent_id = $product_id;
+		}
+
+		if ( $parent_id < 1 ) {
+			return $this->menu_orders_for_posts( array( $product_id ) );
+		}
+
+		if ( ! isset( $this->menu_order_snapshot[ $parent_id ] ) ) {
+			$ids                                     = array_merge(
+				array( $parent_id, $product_id ),
+				$this->variation_ids_for_parent_products( array( $parent_id ) )
+			);
+			$this->menu_order_snapshot[ $parent_id ] = $this->menu_orders_for_posts( $ids );
+		}
+
+		return $this->menu_order_snapshot[ $parent_id ];
+	}
+
+	/**
+	 * Read menu_order from the posts table.
+	 *
+	 * @param array<int, int> $ids Post IDs.
+	 * @return array<int, int>
+	 */
+	private function menu_orders_for_posts( array $ids ): array {
+		global $wpdb;
+
+		$ids = array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
+		if ( array() === $ids ) {
+			return array();
+		}
+
+		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- One read of menu_order so a product save can restore it.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT ID, menu_order FROM {$wpdb->posts} WHERE ID IN ( {$placeholders} )",
+				...$ids
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$orders = array();
+		foreach ( is_array( $rows ) ? $rows : array() as $row ) {
+			$orders[ (int) $row['ID'] ] = (int) $row['menu_order'];
+		}
+		return $orders;
+	}
+
+	/**
+	 * Restore one menu_order when the stored value differs.
+	 *
+	 * @param int $post_id    Post ID.
+	 * @param int $menu_order Original menu_order.
+	 * @return void
+	 */
+	private function restore_menu_order( int $post_id, int $menu_order ): void {
+		global $wpdb;
+
+		if ( $post_id < 1 ) {
+			return;
+		}
+
+		$current = $this->menu_orders_for_posts( array( $post_id ) );
+		if ( ! isset( $current[ $post_id ] ) || $current[ $post_id ] === $menu_order ) {
+			return;
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Restore only menu_order. A product save must not change it.
+		$wpdb->update(
+			$wpdb->posts,
+			array( 'menu_order' => $menu_order ),
+			array( 'ID' => $post_id ),
+			array( '%d' ),
+			array( '%d' )
+		);
+		clean_post_cache( $post_id );
 	}
 }
