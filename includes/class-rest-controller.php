@@ -164,6 +164,34 @@ class Rest_Controller {
 				),
 			)
 		);
+
+		register_rest_route(
+			'low-pte/v1',
+			'/nonce',
+			array(
+				'methods'             => \WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_nonce' ),
+				'permission_callback' => array( $this, 'permissions_check' ),
+			)
+		);
+	}
+
+	/**
+	 * Return a fresh REST nonce for the current user.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @return \WP_REST_Response
+	 */
+	public function get_nonce(): \WP_REST_Response {
+		$response = rest_ensure_response(
+			array(
+				'nonce' => wp_create_nonce( 'wp_rest' ),
+			)
+		);
+		$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0, private' );
+
+		return $response;
 	}
 
 	/**
@@ -575,6 +603,7 @@ class Rest_Controller {
 			$elapsed = ( microtime( true ) - $this->time_start ) * 1000;
 
 			$result->header( 'X-LOW-PTE-Queries', (string) $delta );
+			$result->header( 'X-LOW-PTE-Memory', (string) memory_get_peak_usage( true ) );
 			$result->header( 'Server-Timing', 'total;dur=' . (string) round( $elapsed, 1 ) );
 		}
 

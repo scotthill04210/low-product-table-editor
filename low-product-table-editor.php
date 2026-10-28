@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       LOW Product Table Editor
  * Description:       Edit WooCommerce products and variations in one spreadsheet-style table.
- * Version:           0.1.1
+ * Version:           1.0.0
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Requires Plugins:  woocommerce
@@ -18,7 +18,7 @@ declare( strict_types=1 );
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'LOW_PTE_VERSION', '0.1.1' );
+define( 'LOW_PTE_VERSION', '1.0.0' );
 define( 'LOW_PTE_DB_VERSION', '1' );
 define( 'LOW_PTE_FILE', __FILE__ );
 define( 'LOW_PTE_DIR', plugin_dir_path( __FILE__ ) );

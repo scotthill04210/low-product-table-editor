@@ -249,11 +249,11 @@ class Product_Service {
 		$repository = new Log_Repository();
 		$saved      = $repository->insert_entries( $batch_id, get_current_user_id(), $source, $entries );
 
-		if ( ! $saved ) {
+		if ( ! $saved && defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 			global $wpdb;
 
 			$message = isset( $wpdb->last_error ) ? (string) $wpdb->last_error : '';
-			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- The product save already succeeded. The log failure has to be visible to the site operator.
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Logged only while WP_DEBUG is on. The product save already succeeded.
 			error_log( 'LOW Product Table Editor: ' . $message );
 		}
 

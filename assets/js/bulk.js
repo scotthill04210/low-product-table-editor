@@ -725,12 +725,13 @@
 		heading.textContent = title;
 		card.appendChild(heading);
 		modal.appendChild(card);
-		modal.addEventListener('keydown', function (event) {
-			if (event.key === 'Escape' && !lockEscape && !applying) {
-				event.preventDefault();
-				closeModal(true);
-			}
-		});
+		if (host.trapModal) {
+			host.trapModal(modal, function () {
+				if (!lockEscape && !applying) {
+					closeModal(true);
+				}
+			});
+		}
 		document.body.appendChild(modal);
 		return card;
 	}

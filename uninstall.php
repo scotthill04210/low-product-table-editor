@@ -37,23 +37,5 @@ function low_pte_uninstall_current_site(): void {
 	delete_option( 'low_pte_db_version' );
 }
 
-if ( is_multisite() ) {
-	$low_pte_site_ids = get_sites(
-		array(
-			'fields' => 'ids',
-			'number' => 0,
-		)
-	);
-
-	foreach ( $low_pte_site_ids as $low_pte_site_id ) {
-		switch_to_blog( (int) $low_pte_site_id );
-
-		if ( false !== get_option( 'low_pte_version', false ) ) {
-			low_pte_uninstall_current_site();
-		}
-
-		restore_current_blog();
-	}
-} else {
-	low_pte_uninstall_current_site();
-}
+// This plugin is activated on one site. Uninstall cleans that site only.
+low_pte_uninstall_current_site();

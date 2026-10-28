@@ -57,7 +57,19 @@ class Admin_Page {
 
 		if ( is_string( $hook_suffix ) ) {
 			$this->hook_suffix = $hook_suffix;
+			add_action( 'load-' . $hook_suffix, array( $this, 'send_nocache_headers' ) );
 		}
+	}
+
+	/**
+	 * Keep the editor screen out of caches.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @return void
+	 */
+	public function send_nocache_headers(): void {
+		nocache_headers();
 	}
 
 	/**
@@ -534,6 +546,20 @@ class Admin_Page {
 				'undoReason'            => __( 'Reason', 'low-product-table-editor' ),
 				'saveOrDiscard'         => __( 'Save or discard changes before leaving this page of results.', 'low-product-table-editor' ),
 				'saveFailed'            => __( 'The changes could not be saved.', 'low-product-table-editor' ),
+				'savedPartialNote'      => __( 'Some changes could not be saved.', 'low-product-table-editor' ),
+				'sessionExpiredKeep'    => __( 'Your session expired. Reload the page in a new tab, then come back and press Save.', 'low-product-table-editor' ),
+				'offline'               => __( 'You are offline. Changes stay on this page until you are back online.', 'low-product-table-editor' ),
+				'serverError'           => __( 'Something went wrong on the server. Try again.', 'low-product-table-editor' ),
+				'woocommerceInactive'   => __( 'WooCommerce is not available. Reload the page.', 'low-product-table-editor' ),
+				'tableLabel'            => __( 'Table Editor', 'low-product-table-editor' ),
+				'keyboardShortcuts'     => __( 'Keyboard shortcuts', 'low-product-table-editor' ),
+				'shortcutArrows'        => __( 'Arrow keys move between cells.', 'low-product-table-editor' ),
+				'shortcutEnter'         => __( 'Enter edits a cell or commits the value.', 'low-product-table-editor' ),
+				'shortcutTab'           => __( 'Tab and Shift+Tab move across cells.', 'low-product-table-editor' ),
+				'shortcutEsc'           => __( 'Escape cancels an edit or closes a dialog.', 'low-product-table-editor' ),
+				'shortcutSpace'         => __( 'Space toggles the row checkbox.', 'low-product-table-editor' ),
+				'shortcutSave'          => __( 'Ctrl or Cmd+S saves when there are unsaved changes.', 'low-product-table-editor' ),
+				'unsavedMark'           => __( 'Unsaved', 'low-product-table-editor' ),
 				'regularRequired'       => __( 'Regular price is required.', 'low-product-table-editor' ),
 				'priceFormat'           => __( 'Use a number with up to 4 decimal places.', 'low-product-table-editor' ),
 				'saleLower'             => __( 'Sale price must be lower than the regular price.', 'low-product-table-editor' ),

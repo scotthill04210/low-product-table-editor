@@ -109,6 +109,24 @@
 		}
 	});
 
+	window.addEventListener('offline', function () {
+		showToast(t('offline', 'You are offline. Changes stay on this page until you are back online.'));
+	});
+
+	document.addEventListener('keydown', function (event) {
+		if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') {
+			return;
+		}
+		var wrap = document.querySelector('.low-pte-wrap');
+		if (!wrap || !wrap.contains(document.activeElement)) {
+			return;
+		}
+		event.preventDefault();
+		if (dirty.size > 0) {
+			saveChanges();
+		}
+	});
+
 	window.addEventListener('beforeunload', function (event) {
 		if (dirty.size === 0) {
 			return;
@@ -320,6 +338,15 @@
 		});
 		actions.appendChild(collapseButton);
 
+		var shortcuts = document.createElement('button');
+		shortcuts.type = 'button';
+		shortcuts.className = 'button';
+		shortcuts.textContent = t('keyboardShortcuts', 'Keyboard shortcuts');
+		shortcuts.addEventListener('click', function () {
+			openShortcuts(shortcuts);
+		});
+		actions.appendChild(shortcuts);
+
 		toolbar.appendChild(actions);
 		tablePanel.appendChild(toolbar);
 		buildSelectionBar();
@@ -346,6 +373,8 @@
 		gridEl.className = 'low-pte-grid';
 		gridEl.hidden = true;
 		gridEl.addEventListener('paste', onPaste, true);
+		gridEl.addEventListener('keydown', onGridKey);
+		gridEl.setAttribute('aria-label', t('tableLabel', 'Table Editor'));
 		tablePanel.appendChild(gridEl);
 
 		pagerEl = document.createElement('nav');
@@ -593,6 +622,14 @@
 					showSession();
 					return;
 				}
+				if (response.status >= 500) {
+					showError(t('serverError', 'Something went wrong on the server. Try again.'));
+					return;
+				}
+				if (code === 'rest_no_route') {
+					showError(t('woocommerceInactive', 'WooCommerce is not available. Reload the page.'));
+					return;
+				}
 				showError();
 				return;
 			}
@@ -629,13 +666,13 @@
 		mount.setAttribute('aria-busy', 'false');
 	}
 
-	function showError() {
+	function showError(text) {
 		destroyTable();
 		setTreeButtons(false);
 		skeletonEl.hidden = true;
 		gridEl.hidden = true;
 		pagerEl.hidden = true;
-		setMessage(t('loadError', 'Products could not be loaded. Try again.'), 'error', {
+		setMessage(text || t('loadError', 'Products could not be loaded. Try again.'), 'error', {
 			label: t('retry', 'Retry'),
 			onClick: load
 		});
@@ -658,6 +695,11 @@
 		messageEl.replaceChildren();
 		messageEl.hidden = false;
 		messageEl.className = 'low-pte-message' + (kind === 'error' || kind === 'session' ? ' low-pte-message-error' : '');
+		if (kind === 'error' || kind === 'session') {
+			messageEl.setAttribute('role', 'alert');
+		} else {
+			messageEl.setAttribute('role', 'status');
+		}
 
 		var paragraph = document.createElement('p');
 		paragraph.className = 'low-pte-message-text';
@@ -723,9 +765,14 @@
 				},
 				rowFormatter: function (row) {
 					var element = row.getElement();
-					var type = row.getData().type;
+					var data = row.getData();
+					var type = data.type;
 					element.classList.toggle('low-pte-parent-row', type !== 'variation');
 					element.classList.toggle('low-pte-variation-row', type === 'variation');
+					element.setAttribute('aria-selected', isRowSelected(data.id) ? 'true' : 'false');
+					if (type !== 'variation' && typeof row.isTreeExpanded === 'function') {
+						element.setAttribute('aria-expanded', row.isTreeExpanded() ? 'true' : 'false');
+					}
 					paintRow(row);
 				},
 				columns: [
@@ -748,6 +795,8 @@
 			setTreeButtons(true);
 			updateSelectionUi();
 			reapplyDirty();
+			table.on('renderComplete', repairGridSemantics);
+			repairGridSemantics();
 		} catch (error) {
 			table = null;
 			gridEl.replaceChildren();
@@ -1043,7 +1092,11 @@
 	function textFormatter(cell) {
 		var span = document.createElement('span');
 		var value = cell.getValue();
+		span.className = 'low-pte-clip';
 		span.textContent = value === null || value === undefined ? '' : String(value);
+		if (span.textContent.length > 24) {
+			span.title = span.textContent;
+		}
 		return span;
 	}
 
@@ -1339,13 +1392,13 @@
 		armToast(toastRemaining);
 	}
 
-	function showUndoToast(savedCount, batchIds) {
+	function showUndoToast(savedCount, batchIds, note) {
 		window.clearTimeout(toastTimer);
 		toastTimer = 0;
 		toastEl.replaceChildren();
 		toastEl.hidden = false;
 		var text = document.createElement('span');
-		text.textContent = t('savedItems', 'Saved %s items.').replace('%s', String(savedCount));
+		text.textContent = t('savedItems', 'Saved %s items.').replace('%s', String(savedCount)) + (note ? ' ' + note : '');
 		var button = document.createElement('button');
 		button.type = 'button';
 		button.className = 'low-pte-toast-undo';
@@ -1429,15 +1482,45 @@
 			var interactive = field === 'description_preview' ? canEdit(data, 'description') : canEdit(data, field);
 			element.classList.toggle('low-pte-readonly', !interactive);
 			element.classList.toggle('low-pte-description', field === 'description_preview' && interactive);
-			element.classList.toggle('low-pte-dirty', isDirtyField(data.id, field));
+			var dirtyField = isDirtyField(data.id, field);
+			element.classList.toggle('low-pte-dirty', dirtyField);
+			if (dirtyField) {
+				element.setAttribute('data-low-pte-state', 'unsaved');
+			} else {
+				element.removeAttribute('data-low-pte-state');
+			}
 			var message = messageFor(data.id, field);
 			element.classList.toggle('low-pte-error', message !== '');
+			var tip = element.querySelector('.low-pte-cell-tip');
 			if (message) {
 				element.title = message;
 				element.setAttribute('data-low-pte-tip', '1');
-			} else if (element.getAttribute('data-low-pte-tip') === '1') {
+				element.setAttribute('aria-invalid', 'true');
+				if (!tip) {
+					tip = document.createElement('span');
+					tip.className = 'low-pte-cell-tip';
+					element.appendChild(tip);
+				}
+				tip.id = 'low-pte-tip-' + data.id + '-' + field;
+				tip.textContent = message;
+				element.setAttribute('aria-describedby', tip.id);
+			} else {
+				element.removeAttribute('aria-invalid');
+				element.removeAttribute('aria-describedby');
+				if (tip) {
+					tip.remove();
+				}
+				if (element.getAttribute('data-low-pte-tip') === '1') {
+					element.removeAttribute('title');
+					element.removeAttribute('data-low-pte-tip');
+				}
+			}
+			if (dirtyField && !message) {
+				element.title = t('unsavedMark', 'Unsaved');
+				element.setAttribute('data-low-pte-dirty-title', '1');
+			} else if (!dirtyField && element.getAttribute('data-low-pte-dirty-title') === '1') {
 				element.removeAttribute('title');
-				element.removeAttribute('data-low-pte-tip');
+				element.removeAttribute('data-low-pte-dirty-title');
 			}
 			if (field === 'description_preview' && canEdit(data, 'description')) {
 				element.tabIndex = 0;
@@ -1814,6 +1897,178 @@
 		repaintRows();
 	}
 
+	function onGridKey(event) {
+		if (event.target.closest && event.target.closest('.tabulator-editing, input, select, textarea')) {
+			return;
+		}
+		var cellEl = event.target.closest ? event.target.closest('.tabulator-cell') : null;
+		if (!cellEl || !table) {
+			return;
+		}
+		if (event.key === ' ' || event.key === 'Spacebar') {
+			var box = cellEl.querySelector('input[type="checkbox"]');
+			if (box) {
+				event.preventDefault();
+				box.click();
+			}
+			return;
+		}
+		if (event.key === 'Enter') {
+			var component = cellFromElement(cellEl);
+			if (component && component.getColumn().getDefinition().editor) {
+				event.preventDefault();
+				component.edit();
+			}
+			return;
+		}
+		var colDelta = 0;
+		var rowDelta = 0;
+		if (event.key === 'ArrowLeft') {
+			colDelta = -1;
+		} else if (event.key === 'ArrowRight') {
+			colDelta = 1;
+		} else if (event.key === 'ArrowUp') {
+			rowDelta = -1;
+		} else if (event.key === 'ArrowDown') {
+			rowDelta = 1;
+		} else if (event.key === 'Tab') {
+			colDelta = event.shiftKey ? -1 : 1;
+		} else {
+			return;
+		}
+		var next = adjacentCell(cellEl, colDelta, rowDelta);
+		if (!next) {
+			return;
+		}
+		event.preventDefault();
+		cellEl.tabIndex = -1;
+		next.tabIndex = 0;
+		next.focus();
+	}
+
+	function adjacentCell(cellEl, colDelta, rowDelta) {
+		var row = cellEl.parentElement;
+		var rows = Array.from(gridEl.querySelectorAll('.tabulator-row'));
+		var rowIndex = rows.indexOf(row);
+		var cells = Array.from(row.children).filter(function (el) {
+			return el.classList.contains('tabulator-cell');
+		});
+		var colIndex = cells.indexOf(cellEl);
+		var nextRow = rows[rowIndex + rowDelta];
+		if (!nextRow) {
+			return null;
+		}
+		var nextCells = Array.from(nextRow.children).filter(function (el) {
+			return el.classList.contains('tabulator-cell');
+		});
+		return nextCells[colIndex + colDelta] || null;
+	}
+
+	function cellFromElement(element) {
+		var rowEl = element.closest('.tabulator-row');
+		if (!rowEl || !table) {
+			return null;
+		}
+		function walk(list) {
+			var index;
+			for (index = 0; index < list.length; index += 1) {
+				if (list[index].getElement() === rowEl) {
+					return list[index];
+				}
+				var children = typeof list[index].getTreeChildren === 'function' ? list[index].getTreeChildren() : [];
+				var found = walk(children || []);
+				if (found) {
+					return found;
+				}
+			}
+			return null;
+		}
+		var row;
+		try {
+			row = walk(table.getRows());
+		} catch (error) {
+			return null;
+		}
+		if (!row) {
+			return null;
+		}
+		var cells = row.getCells();
+		var cellIndex;
+		for (cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
+			if (cells[cellIndex].getElement() === element) {
+				return cells[cellIndex];
+			}
+		}
+		return null;
+	}
+
+	function repairGridSemantics() {
+		var holder = gridEl.querySelector('.tabulator-tableholder');
+		if (holder) {
+			holder.removeAttribute('tabindex');
+			holder.setAttribute('role', 'none');
+		}
+		if (!gridEl.getAttribute('role') || gridEl.getAttribute('role') === 'grid') {
+			gridEl.setAttribute('role', 'treegrid');
+		}
+		if (!gridEl.querySelector('.tabulator-cell[tabindex="0"]')) {
+			var nextCell = gridEl.querySelector('.tabulator-cell');
+			if (nextCell) {
+				nextCell.tabIndex = 0;
+			}
+		}
+	}
+
+	function openShortcuts(trigger) {
+		closeModal(false);
+		modalReturn = trigger || null;
+		modalEl = document.createElement('div');
+		modalEl.className = 'low-pte-modal';
+		modalEl.setAttribute('role', 'dialog');
+		modalEl.setAttribute('aria-modal', 'true');
+		var card = document.createElement('div');
+		card.className = 'low-pte-modal-card';
+		var heading = document.createElement('h2');
+		heading.className = 'low-pte-modal-title';
+		heading.id = 'low-pte-shortcuts-title';
+		heading.textContent = t('keyboardShortcuts', 'Keyboard shortcuts');
+		modalEl.setAttribute('aria-labelledby', 'low-pte-shortcuts-title');
+		var list = document.createElement('ul');
+		list.className = 'low-pte-shortcuts';
+		[
+			t('shortcutArrows', 'Arrow keys move between cells.'),
+			t('shortcutEnter', 'Enter edits a cell or commits the value.'),
+			t('shortcutTab', 'Tab and Shift+Tab move across cells.'),
+			t('shortcutEsc', 'Escape cancels an edit or closes a dialog.'),
+			t('shortcutSpace', 'Space toggles the row checkbox.'),
+			t('shortcutSave', 'Ctrl or Cmd+S saves when there are unsaved changes.')
+		].forEach(function (line) {
+			var item = document.createElement('li');
+			item.textContent = line;
+			list.appendChild(item);
+		});
+		var close = document.createElement('button');
+		close.type = 'button';
+		close.className = 'button';
+		close.textContent = t('close', 'Close');
+		close.addEventListener('click', function () {
+			var back = modalReturn;
+			closeModal(false);
+			if (back && typeof back.focus === 'function') {
+				back.focus();
+			}
+		});
+		card.appendChild(heading);
+		card.appendChild(list);
+		card.appendChild(close);
+		modalEl.appendChild(card);
+		trapModal(modalEl, function () {
+			close.click();
+		});
+		document.body.appendChild(modalEl);
+		close.focus();
+	}
+
 	function saveChanges() {
 		if (saving || dirty.size === 0) {
 			return;
@@ -1860,17 +2115,18 @@
 		return '';
 	}
 
-	function sendBatch(items, index, savedCount, failureText, logFailed, batchIds) {
+	function sendBatch(items, index, savedCount, failureText, logFailed, batchIds, retried) {
 		var ids = batchIds || [];
 		if (index >= items.length) {
 			saving = false;
 			updateSaveBar();
+			var note = failureText ? t('savedPartialNote', 'Some changes could not be saved.') : '';
 			if (savedCount > 0 && logFailed) {
 				showToast(t('logFailed', 'Saved, but the change could not be logged, so it cannot be undone.'));
 			} else if (savedCount > 0 && ids.length) {
-				showUndoToast(savedCount, ids);
+				showUndoToast(savedCount, ids, note);
 			} else if (savedCount > 0) {
-				showToast(t('savedItems', 'Saved %s items.').replace('%s', String(savedCount)));
+				showToast(t('savedItems', 'Saved %s items.').replace('%s', String(savedCount)) + (note ? ' ' + note : ''));
 			} else {
 				showToast(failureText || t('saveFailed', 'The changes could not be saved.'));
 			}
@@ -1878,11 +2134,31 @@
 		}
 		patchItems(items.slice(index, index + 50)).then(function (result) {
 			if (!result.response.ok) {
+				var code = result.body && result.body.code ? String(result.body.code) : '';
+				if ((result.response.status === 401 || code === 'rest_cookie_invalid_nonce') && !retried) {
+					refreshNonce().then(function (ok) {
+						if (!ok) {
+							saving = false;
+							updateSaveBar();
+							showToast(t('sessionExpiredKeep', 'Your session expired. Reload the page in a new tab, then come back and press Save.'));
+							return;
+						}
+						sendBatch(items, index, savedCount, failureText, logFailed, ids, true);
+					});
+					return;
+				}
 				saving = false;
 				updateSaveBar();
-				var code = result.body && result.body.code ? String(result.body.code) : '';
 				if (result.response.status === 401 || result.response.status === 403 || code === 'rest_cookie_invalid_nonce') {
-					showToast(t('sessionExpired', 'Your session expired. Reload the page.'));
+					showToast(t('sessionExpiredKeep', 'Your session expired. Reload the page in a new tab, then come back and press Save.'));
+					return;
+				}
+				if (result.response.status >= 500) {
+					showToast(t('serverError', 'Something went wrong on the server. Try again.'));
+					return;
+				}
+				if (code === 'rest_no_route') {
+					showToast(t('woocommerceInactive', 'WooCommerce is not available. Reload the page.'));
 					return;
 				}
 				showToast(result.body && result.body.message ? String(result.body.message) : (failureText || t('saveFailed', 'The changes could not be saved.')));
@@ -1902,7 +2178,35 @@
 		}).catch(function () {
 			saving = false;
 			updateSaveBar();
+			if (!navigator.onLine) {
+				showToast(t('offline', 'You are offline. Changes stay on this page until you are back online.'));
+				return;
+			}
 			showToast(failureText || t('saveFailed', 'The changes could not be saved.'));
+		});
+	}
+
+	function refreshNonce() {
+		return window.fetch(restRoot() + 'nonce', {
+			method: 'GET',
+			credentials: 'same-origin',
+			cache: 'no-store',
+			headers: {
+				'X-WP-Nonce': config.nonce || '',
+				Accept: 'application/json'
+			}
+		}).then(function (response) {
+			return response.json().then(function (body) {
+				if (!response.ok || !body || !body.nonce) {
+					return false;
+				}
+				config.nonce = String(body.nonce);
+				return true;
+			}).catch(function () {
+				return false;
+			});
+		}).catch(function () {
+			return false;
 		});
 	}
 
@@ -2479,7 +2783,9 @@
 		actions.appendChild(applyButton);
 		card.appendChild(actions);
 		modalEl.appendChild(card);
-		modalEl.addEventListener('keydown', onModalKey);
+		trapModal(modalEl, function () {
+			closeModal(true);
+		});
 		document.body.appendChild(modalEl);
 		window.setTimeout(function () {
 			if (loading) {
@@ -2528,28 +2834,37 @@
 		return { wrap: wrap, area: area };
 	}
 
-	function onModalKey(event) {
-		if (event.key === 'Escape') {
-			event.preventDefault();
-			closeModal(true);
-			return;
-		}
-		if (event.key !== 'Tab' || !modalEl) {
-			return;
-		}
-		var focusable = modalEl.querySelectorAll('textarea, button, input');
-		if (!focusable.length) {
-			return;
-		}
-		var first = focusable[0];
-		var last = focusable[focusable.length - 1];
-		if (event.shiftKey && document.activeElement === first) {
-			event.preventDefault();
-			last.focus();
-		} else if (!event.shiftKey && document.activeElement === last) {
-			event.preventDefault();
-			first.focus();
-		}
+	function trapModal(modal, onEscape) {
+		modal.addEventListener('keydown', function (event) {
+			var open = document.querySelectorAll('.low-pte-modal');
+			if (open.length && modal !== open[open.length - 1]) {
+				return;
+			}
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				event.stopPropagation();
+				onEscape();
+				return;
+			}
+			if (event.key !== 'Tab') {
+				return;
+			}
+			var focusable = Array.from(modal.querySelectorAll('button, [href], input, select, textarea')).filter(function (el) {
+				return !el.disabled && !el.hidden;
+			});
+			if (!focusable.length) {
+				return;
+			}
+			var first = focusable[0];
+			var last = focusable[focusable.length - 1];
+			if (event.shiftKey && document.activeElement === first) {
+				event.preventDefault();
+				last.focus();
+			} else if (!event.shiftKey && document.activeElement === last) {
+				event.preventDefault();
+				first.focus();
+			}
+		});
 	}
 
 	function closeModal(restoreFocus) {
@@ -2932,10 +3247,17 @@
 		table.className = 'low-pte-history-table';
 		var head = document.createElement('thead');
 		var headRow = document.createElement('tr');
-		[t('logWhen', 'When'), t('logWho', 'Who'), t('logSource', 'Source'), t('logItems', 'Items'), t('logChanges', 'Changes'), t('logSummary', 'Summary'), ''].forEach(function (label) {
+		[t('logWhen', 'When'), t('logWho', 'Who'), t('logSource', 'Source'), t('logItems', 'Items'), t('logChanges', 'Changes'), t('logSummary', 'Summary'), t('undo', 'Undo')].forEach(function (label) {
 			var cell = document.createElement('th');
-			cell.textContent = label;
 			cell.scope = 'col';
+			if (label === t('undo', 'Undo')) {
+				var hiddenUndo = document.createElement('span');
+				hiddenUndo.className = 'low-pte-cell-tip';
+				hiddenUndo.textContent = label;
+				cell.appendChild(hiddenUndo);
+			} else {
+				cell.textContent = label;
+			}
 			headRow.appendChild(cell);
 		});
 		head.appendChild(headRow);
@@ -3087,12 +3409,7 @@
 		card.appendChild(body);
 		card.appendChild(actions);
 		modalEl.appendChild(card);
-		modalEl.addEventListener('keydown', function (event) {
-			if (event.key === 'Escape') {
-				event.preventDefault();
-				dismiss();
-			}
-		});
+		trapModal(modalEl, dismiss);
 		document.body.appendChild(modalEl);
 		confirm.focus();
 	}
@@ -3290,11 +3607,8 @@
 		actions.appendChild(close);
 		card.appendChild(actions);
 		modalEl.appendChild(card);
-		modalEl.addEventListener('keydown', function (event) {
-			if (event.key === 'Escape') {
-				event.preventDefault();
-				close.click();
-			}
+		trapModal(modalEl, function () {
+			close.click();
 		});
 		document.body.appendChild(modalEl);
 		close.focus();
@@ -3344,10 +3658,17 @@
 		var table = document.createElement('table');
 		table.className = 'low-pte-history-entries';
 		var head = document.createElement('tr');
-		[t('columnProduct', 'Product'), t('logField', 'Field'), t('logOld', 'Old'), t('logNew', 'New'), ''].forEach(function (label) {
+		[t('columnProduct', 'Product'), t('logField', 'Field'), t('logOld', 'Old'), t('logNew', 'New'), t('logUndone', 'Undone')].forEach(function (label) {
 			var th = document.createElement('th');
-			th.textContent = label;
 			th.scope = 'col';
+			if (label === t('logUndone', 'Undone')) {
+				var hiddenUndone = document.createElement('span');
+				hiddenUndone.className = 'low-pte-cell-tip';
+				hiddenUndone.textContent = label;
+				th.appendChild(hiddenUndone);
+			} else {
+				th.textContent = label;
+			}
 			head.appendChild(th);
 		});
 		table.appendChild(head);
@@ -3420,10 +3741,8 @@
 		card.appendChild(body);
 		card.appendChild(close);
 		modalEl.appendChild(card);
-		modalEl.addEventListener('keydown', function (event) {
-			if (event.key === 'Escape') {
-				close.click();
-			}
+		trapModal(modalEl, function () {
+			close.click();
 		});
 		document.body.appendChild(modalEl);
 		close.focus();
@@ -3534,6 +3853,7 @@
 			load();
 		},
 		toast: showToast,
-		requestUndo: requestUndo
+		requestUndo: requestUndo,
+		trapModal: trapModal
 	};
 }());
