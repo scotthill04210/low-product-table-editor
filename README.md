@@ -2,7 +2,7 @@
 
 Admin-only WordPress plugin that edits WooCommerce products and variations in one spreadsheet-style table.
 
-**1.0.0** is the working-tree release. It adds the product grid, inline editing, the audit log, bulk price changes, and conflict-safe undo. The published 0.1.1 zip has the scaffold and GitHub updates only.
+**1.0.0** is the current release. It adds the product grid, inline editing, the audit log, bulk price changes, conflict-safe undo, and keyboard access. The 0.1.1 zip has the scaffold and GitHub updates only.
 
 ## Product grid
 

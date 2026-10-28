@@ -1,6 +1,6 @@
 # LOW Product Table Editor: Cursor Prompts
 
-Current release in the working tree: **1.0.0**. Phases 1 through 8 are built. The published 0.1.1 zip has the scaffold and the GitHub updater. See `docs/TESTING.md` for the QA script and `docs/CHANGELOG.md` for the release notes.
+Current release: **1.0.0**. Phases 1 through 8 are in that release. The 0.1.1 zip has the scaffold and the GitHub updater only. See `docs/TESTING.md` for the QA script and `docs/CHANGELOG.md` for the release notes.
 
 Each file in this folder is one self-contained Cursor prompt. Paste the whole file into Cursor, one phase at a time. Do not start a phase until the previous one passes its acceptance checks.
 
