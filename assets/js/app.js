@@ -55,22 +55,39 @@
 	var rowStatusMessage = new Map();
 	var modalEl = null;
 	var modalReturn = null;
+	var tablePanel;
+	var historyPanel;
+	var historyRequest = 0;
 
 	buildShell();
 	syncControls();
 	writeUrl('replace');
 	load();
+	if (state.tab === 'history') {
+		loadHistory();
+	}
 
 	window.addEventListener('popstate', function () {
-		if (dirty.size) {
+		var next = readState();
+		if (dirty.size && tableFiltersChanged(state, next)) {
 			writeUrl('replace');
 			showToast(t('saveOrDiscard', 'Save or discard changes before leaving this page of results.'));
 			return;
 		}
+		var tableChanged = tableFiltersChanged(state, next);
+		var historyChanged = historyFiltersChanged(state, next);
+		var tabChanged = next.tab !== state.tab;
 		window.clearTimeout(searchTimer);
-		state = readState();
+		state = next;
 		syncControls();
-		load();
+		syncHistoryControls();
+		applyTab();
+		if (tableChanged) {
+			load();
+		}
+		if (state.tab === 'history' && (historyChanged || tabChanged)) {
+			loadHistory();
+		}
 	});
 
 	window.addEventListener('beforeunload', function (event) {
@@ -90,6 +107,9 @@
 		var perPageValue = parseInt(params.get('per_page') || '', 10);
 		var pageValue = parseInt(params.get('paged') || '1', 10);
 
+		var logPage = parseInt(params.get('log_page') || '1', 10);
+		var logPerPage = parseInt(params.get('log_per_page') || '20', 10);
+
 		return {
 			search: (params.get('search') || '').slice(0, 100),
 			category: params.get('category') || '',
@@ -97,8 +117,27 @@
 			stock_status: oneOf(params.get('stock_status'), ['instock', 'outofstock', 'onbackorder']),
 			status: oneOf(params.get('status'), ['publish', 'draft', 'private', 'pending']),
 			page: Number.isFinite(pageValue) && pageValue > 0 ? pageValue : 1,
-			per_page: perPageOptions.indexOf(perPageValue) !== -1 ? perPageValue : defaultPerPage
+			per_page: perPageOptions.indexOf(perPageValue) !== -1 ? perPageValue : defaultPerPage,
+			tab: params.get('tab') === 'history' ? 'history' : 'table',
+			log_user: (params.get('log_user') || '').replace(/\D/g, ''),
+			log_product: (params.get('log_product') || '').slice(0, 100),
+			log_from: dateParam(params.get('log_from')),
+			log_to: dateParam(params.get('log_to')),
+			log_page: Number.isFinite(logPage) && logPage > 0 ? logPage : 1,
+			log_per_page: [10, 20, 50].indexOf(logPerPage) !== -1 ? logPerPage : 20
 		};
+	}
+
+	function dateParam(value) {
+		return /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : '';
+	}
+
+	function tableFiltersChanged(left, right) {
+		return left.search !== right.search || left.category !== right.category || left.type !== right.type || left.stock_status !== right.stock_status || left.status !== right.status || left.page !== right.page || left.per_page !== right.per_page;
+	}
+
+	function historyFiltersChanged(left, right) {
+		return left.log_user !== right.log_user || left.log_product !== right.log_product || left.log_from !== right.log_from || left.log_to !== right.log_to || left.log_page !== right.log_page || left.log_per_page !== right.log_per_page;
 	}
 
 	function oneOf(value, allowed) {
@@ -107,7 +146,7 @@
 
 	function writeUrl(mode) {
 		var next = new URLSearchParams(window.location.search);
-		['search', 'category', 'type', 'stock_status', 'status', 'per_page', 'paged'].forEach(function (key) {
+		['search', 'category', 'type', 'stock_status', 'status', 'per_page', 'paged', 'tab', 'log_user', 'log_product', 'log_from', 'log_to', 'log_page', 'log_per_page'].forEach(function (key) {
 			next.delete(key);
 		});
 
@@ -132,6 +171,27 @@
 		if (state.page > 1) {
 			next.set('paged', String(state.page));
 		}
+		if (state.tab === 'history') {
+			next.set('tab', 'history');
+		}
+		if (state.log_user) {
+			next.set('log_user', state.log_user);
+		}
+		if (state.log_product) {
+			next.set('log_product', state.log_product);
+		}
+		if (state.log_from) {
+			next.set('log_from', state.log_from);
+		}
+		if (state.log_to) {
+			next.set('log_to', state.log_to);
+		}
+		if (state.log_page > 1) {
+			next.set('log_page', String(state.log_page));
+		}
+		if (state.log_per_page !== 20) {
+			next.set('log_per_page', String(state.log_per_page));
+		}
 
 		var query = next.toString();
 		var url = window.location.pathname + (query ? '?' + query : '');
@@ -146,6 +206,9 @@
 
 	function buildShell() {
 		mount.textContent = '';
+		tablePanel = document.createElement('div');
+		tablePanel.id = 'low-pte-table-panel';
+		tablePanel.className = 'low-pte-table-panel';
 
 		var toolbar = document.createElement('div');
 		toolbar.className = 'low-pte-toolbar';
@@ -239,14 +302,14 @@
 		actions.appendChild(collapseButton);
 
 		toolbar.appendChild(actions);
-		mount.appendChild(toolbar);
+		tablePanel.appendChild(toolbar);
 
 		messageEl = document.createElement('div');
 		messageEl.className = 'low-pte-message';
 		messageEl.setAttribute('role', 'status');
 		messageEl.setAttribute('aria-live', 'polite');
 		messageEl.hidden = true;
-		mount.appendChild(messageEl);
+		tablePanel.appendChild(messageEl);
 
 		skeletonEl = document.createElement('div');
 		skeletonEl.className = 'low-pte-skeleton';
@@ -257,19 +320,20 @@
 			bar.className = 'low-pte-skeleton-bar';
 			skeletonEl.appendChild(bar);
 		}
-		mount.appendChild(skeletonEl);
+		tablePanel.appendChild(skeletonEl);
 
 		gridEl = document.createElement('div');
 		gridEl.className = 'low-pte-grid';
 		gridEl.hidden = true;
 		gridEl.addEventListener('paste', onPaste, true);
-		mount.appendChild(gridEl);
+		tablePanel.appendChild(gridEl);
 
 		pagerEl = document.createElement('nav');
 		pagerEl.className = 'low-pte-pager';
 		pagerEl.setAttribute('aria-label', t('pagination', 'Pagination'));
 		pagerEl.hidden = true;
-		mount.appendChild(pagerEl);
+		tablePanel.appendChild(pagerEl);
+		mount.appendChild(tablePanel);
 
 		saveBar = document.createElement('div');
 		saveBar.className = 'low-pte-savebar';
@@ -289,6 +353,7 @@
 		saveButton.textContent = t('saveChanges', 'Save changes');
 		saveButton.addEventListener('click', saveChanges);
 		saveBar.appendChild(saveButton);
+		buildHistory();
 		mount.appendChild(saveBar);
 
 		toastEl = document.createElement('div');
@@ -297,6 +362,8 @@
 		toastEl.setAttribute('aria-live', 'polite');
 		toastEl.hidden = true;
 		mount.appendChild(toastEl);
+		bindTabs();
+		applyTab();
 
 		document.addEventListener('copy', onCopy, true);
 	}
@@ -1432,11 +1499,13 @@
 		return '';
 	}
 
-	function sendBatch(items, index, savedCount, failureText) {
+	function sendBatch(items, index, savedCount, failureText, logFailed) {
 		if (index >= items.length) {
 			saving = false;
 			updateSaveBar();
-			if (savedCount > 0) {
+			if (savedCount > 0 && logFailed) {
+				showToast(t('logFailed', 'Saved, but the change could not be logged, so it cannot be undone.'));
+			} else if (savedCount > 0) {
 				showToast(t('savedItems', 'Saved %s items.').replace('%s', String(savedCount)));
 			} else {
 				showToast(failureText || t('saveFailed', 'The changes could not be saved.'));
@@ -1460,7 +1529,8 @@
 			if (added === 0) {
 				nextFailure = nextFailure || firstFailureMessage(result.body);
 			}
-			sendBatch(items, index + 50, savedCount + added, nextFailure);
+			var nextLogFailed = !!logFailed || !!(result.body && result.body.log_failed);
+			sendBatch(items, index + 50, savedCount + added, nextFailure, nextLogFailed);
 		}).catch(function () {
 			saving = false;
 			updateSaveBar();
@@ -2175,5 +2245,564 @@
 			hidden: t('visibilityHidden', 'Hidden')
 		};
 		return Object.prototype.hasOwnProperty.call(map, value) ? map[value] : (value ? String(value) : '');
+	}
+
+	var historyUserSelect;
+	var historyProductInput;
+	var historyFromInput;
+	var historyToInput;
+	var historyPerPageSelect;
+	var historyList;
+	var historyMessage;
+	var historyPager;
+
+	function bindTabs() {
+		var tableTab = document.getElementById('low-pte-tab-table');
+		var historyTab = document.getElementById('low-pte-tab-history');
+		if (tableTab) {
+			tableTab.addEventListener('click', function () {
+				selectTab('table');
+			});
+		}
+		if (historyTab) {
+			historyTab.addEventListener('click', function () {
+				selectTab('history');
+			});
+		}
+	}
+
+	function selectTab(tab) {
+		var next = tab === 'history' ? 'history' : 'table';
+		if (next === state.tab) {
+			return;
+		}
+		state.tab = next;
+		applyTab();
+		writeUrl('push');
+		if (next === 'history') {
+			loadHistory();
+		}
+	}
+
+	function applyTab() {
+		var history = state.tab === 'history';
+		if (tablePanel) {
+			tablePanel.hidden = history;
+		}
+		if (historyPanel) {
+			historyPanel.hidden = !history;
+		}
+		var tableTab = document.getElementById('low-pte-tab-table');
+		var historyTab = document.getElementById('low-pte-tab-history');
+		if (tableTab) {
+			tableTab.classList.toggle('low-pte-tab-active', !history);
+			tableTab.setAttribute('aria-selected', history ? 'false' : 'true');
+		}
+		if (historyTab) {
+			historyTab.classList.toggle('low-pte-tab-active', history);
+			historyTab.setAttribute('aria-selected', history ? 'true' : 'false');
+		}
+	}
+
+	function buildHistory() {
+		historyPanel = document.createElement('div');
+		historyPanel.id = 'low-pte-history';
+		historyPanel.className = 'low-pte-history';
+		historyPanel.hidden = true;
+
+		var toolbar = document.createElement('div');
+		toolbar.className = 'low-pte-toolbar';
+
+		historyUserSelect = document.createElement('select');
+		historyUserSelect.addEventListener('change', function () {
+			state.log_user = historyUserSelect.value;
+			state.log_page = 1;
+			writeUrl('push');
+			loadHistory();
+		});
+		toolbar.appendChild(field(t('user', 'User'), historyUserSelect));
+
+		historyProductInput = document.createElement('input');
+		historyProductInput.type = 'search';
+		historyProductInput.className = 'low-pte-search';
+		historyProductInput.maxLength = 100;
+		historyProductInput.autocomplete = 'off';
+		historyProductInput.addEventListener('input', function () {
+			window.clearTimeout(historyProductInput.timer);
+			historyProductInput.timer = window.setTimeout(function () {
+				state.log_product = historyProductInput.value.trim().slice(0, 100);
+				state.log_page = 1;
+				writeUrl('push');
+				loadHistory();
+			}, 300);
+		});
+		toolbar.appendChild(field(t('product', 'Product'), historyProductInput));
+
+		historyFromInput = document.createElement('input');
+		historyFromInput.type = 'date';
+		historyFromInput.addEventListener('change', onHistoryDateChange);
+		toolbar.appendChild(field(t('dateFrom', 'Date from'), historyFromInput));
+
+		historyToInput = document.createElement('input');
+		historyToInput.type = 'date';
+		historyToInput.addEventListener('change', onHistoryDateChange);
+		toolbar.appendChild(field(t('dateTo', 'Date to'), historyToInput));
+
+		historyPerPageSelect = document.createElement('select');
+		fillOptions(historyPerPageSelect, [['10', '10'], ['20', '20'], ['50', '50']]);
+		historyPerPageSelect.addEventListener('change', function () {
+			state.log_per_page = parseInt(historyPerPageSelect.value, 10) || 20;
+			state.log_page = 1;
+			writeUrl('push');
+			loadHistory();
+		});
+		toolbar.appendChild(field(t('perPage', 'Per page'), historyPerPageSelect));
+
+		var clearHistory = document.createElement('button');
+		clearHistory.type = 'button';
+		clearHistory.className = 'button';
+		clearHistory.textContent = t('clearFilters', 'Clear filters');
+		clearHistory.addEventListener('click', function () {
+			state.log_user = '';
+			state.log_product = '';
+			state.log_from = '';
+			state.log_to = '';
+			state.log_page = 1;
+			syncHistoryControls();
+			writeUrl('push');
+			loadHistory();
+		});
+		toolbar.appendChild(clearHistory);
+		historyPanel.appendChild(toolbar);
+
+		historyMessage = document.createElement('div');
+		historyMessage.className = 'low-pte-message';
+		historyMessage.setAttribute('role', 'status');
+		historyMessage.hidden = true;
+		historyPanel.appendChild(historyMessage);
+
+		historyList = document.createElement('div');
+		historyList.className = 'low-pte-history-list';
+		historyPanel.appendChild(historyList);
+
+		historyPager = document.createElement('nav');
+		historyPager.className = 'low-pte-pager';
+		historyPager.setAttribute('aria-label', t('pagination', 'Pagination'));
+		historyPager.hidden = true;
+		historyPanel.appendChild(historyPager);
+		historyPanel.appendChild(buildLogSettings());
+		mount.appendChild(historyPanel);
+		syncHistoryControls();
+	}
+
+	function onHistoryDateChange() {
+		state.log_from = dateParam(historyFromInput.value);
+		state.log_to = dateParam(historyToInput.value);
+		state.log_page = 1;
+		writeUrl('push');
+		loadHistory();
+	}
+
+	function syncHistoryControls() {
+		if (!historyUserSelect) {
+			return;
+		}
+		historyProductInput.value = state.log_product;
+		historyFromInput.value = state.log_from;
+		historyToInput.value = state.log_to;
+		historyPerPageSelect.value = String(state.log_per_page);
+		if (historyUserSelect.options.length) {
+			historyUserSelect.value = state.log_user;
+		}
+	}
+
+	function buildLogSettings() {
+		var settings = config.settings || {};
+		var form = document.createElement('form');
+		form.className = 'low-pte-log-settings';
+		form.method = 'post';
+		form.action = settings.actionUrl || '';
+
+		var title = document.createElement('h2');
+		title.textContent = t('logSettings', 'Log settings');
+		form.appendChild(title);
+
+		var action = document.createElement('input');
+		action.type = 'hidden';
+		action.name = 'action';
+		action.value = 'low_pte_save_settings';
+		form.appendChild(action);
+
+		var nonce = document.createElement('input');
+		nonce.type = 'hidden';
+		nonce.name = 'low_pte_settings_nonce';
+		nonce.value = settings.nonce || '';
+		form.appendChild(nonce);
+
+		var days = document.createElement('input');
+		days.type = 'number';
+		days.name = 'low_pte_retention_days';
+		days.min = '1';
+		days.max = '3650';
+		days.required = true;
+		days.value = String(settings.retentionDays || 180);
+		form.appendChild(field(t('retentionDays', 'Keep log entries for this many days'), days));
+
+		var checkLabel = document.createElement('label');
+		checkLabel.className = 'low-pte-check';
+		var check = document.createElement('input');
+		check.type = 'checkbox';
+		check.name = 'low_pte_delete_data_on_uninstall';
+		check.value = 'yes';
+		check.checked = !!settings.deleteData;
+		checkLabel.appendChild(check);
+		checkLabel.appendChild(document.createTextNode(t('deleteLogOnUninstall', 'Delete the log table when the plugin is deleted')));
+		form.appendChild(checkLabel);
+
+		var submit = document.createElement('button');
+		submit.type = 'submit';
+		submit.className = 'button button-primary';
+		submit.textContent = t('saveSettings', 'Save settings');
+		form.appendChild(submit);
+		return form;
+	}
+
+	function loadHistory() {
+		var serial = historyRequest + 1;
+		historyRequest = serial;
+		historyMessage.hidden = false;
+		historyMessage.textContent = t('logLoading', 'Loading history...');
+		historyList.textContent = '';
+		fetchLog({
+			user: state.log_user,
+			product: state.log_product,
+			date_from: state.log_from,
+			date_to: state.log_to,
+			page: state.log_page,
+			per_page: state.log_per_page
+		}).then(function (result) {
+			if (serial !== historyRequest) {
+				return;
+			}
+			if (!result.response.ok) {
+				showHistoryError();
+				return;
+			}
+			renderHistory(result.body || {});
+		}).catch(function () {
+			if (serial === historyRequest) {
+				showHistoryError();
+			}
+		});
+	}
+
+	function showHistoryError() {
+		historyMessage.hidden = false;
+		historyMessage.textContent = '';
+		var paragraph = document.createElement('p');
+		paragraph.className = 'low-pte-message-text';
+		paragraph.textContent = t('logError', 'The history could not be loaded. Try again.');
+		var button = document.createElement('button');
+		button.type = 'button';
+		button.className = 'button';
+		button.textContent = t('retry', 'Retry');
+		button.addEventListener('click', loadHistory);
+		historyMessage.appendChild(paragraph);
+		historyMessage.appendChild(button);
+		historyPager.hidden = true;
+	}
+
+	function fetchLog(params) {
+		var query = new URLSearchParams();
+		Object.keys(params).forEach(function (key) {
+			if (params[key] !== '' && params[key] !== null && params[key] !== undefined) {
+				query.set(key, String(params[key]));
+			}
+		});
+		return window.fetch(restRoot() + 'log?' + query.toString(), {
+			credentials: 'same-origin',
+			headers: {
+				'X-WP-Nonce': config.nonce || '',
+				Accept: 'application/json'
+			}
+		}).then(function (response) {
+			return response.json().then(function (body) {
+				return { response: response, body: body };
+			}).catch(function () {
+				return { response: response, body: {} };
+			});
+		});
+	}
+
+	function renderHistory(body) {
+		fillHistoryUsers(body.users || []);
+		var batches = Array.isArray(body.batches) ? body.batches : [];
+		historyList.textContent = '';
+		if (!batches.length) {
+			historyMessage.hidden = false;
+			historyMessage.textContent = t('logEmpty', 'No changes have been logged.');
+			historyPager.hidden = true;
+			return;
+		}
+		historyMessage.hidden = true;
+		historyMessage.textContent = '';
+		var table = document.createElement('table');
+		table.className = 'low-pte-history-table';
+		var head = document.createElement('thead');
+		var headRow = document.createElement('tr');
+		[t('logWhen', 'When'), t('logWho', 'Who'), t('logSource', 'Source'), t('logItems', 'Items'), t('logChanges', 'Changes'), t('logSummary', 'Summary'), ''].forEach(function (label) {
+			var cell = document.createElement('th');
+			cell.textContent = label;
+			cell.scope = 'col';
+			headRow.appendChild(cell);
+		});
+		head.appendChild(headRow);
+		table.appendChild(head);
+		var bodyEl = document.createElement('tbody');
+		batches.forEach(function (batch) {
+			bodyEl.appendChild(renderBatchRow(batch));
+		});
+		table.appendChild(bodyEl);
+		historyList.appendChild(table);
+		renderHistoryPager(Number(body.total) || 0, Number(body.page) || state.log_page);
+	}
+
+	function fillHistoryUsers(users) {
+		var current = state.log_user;
+		historyUserSelect.textContent = '';
+		var all = document.createElement('option');
+		all.value = '';
+		all.textContent = t('allUsers', 'All users');
+		historyUserSelect.appendChild(all);
+		users.forEach(function (user) {
+			var option = document.createElement('option');
+			option.value = String(user.id);
+			option.textContent = user.name || t('unknownUser', 'Unknown user');
+			historyUserSelect.appendChild(option);
+		});
+		if (current && !historyUserSelect.querySelector('option[value="' + current + '"]')) {
+			var missing = document.createElement('option');
+			missing.value = current;
+			missing.textContent = t('unknownUser', 'Unknown user');
+			historyUserSelect.appendChild(missing);
+		}
+		historyUserSelect.value = current;
+	}
+
+	function renderBatchRow(batch) {
+		var row = document.createElement('tr');
+		appendCell(row, formatWhen(batch.created_at));
+		appendCell(row, batch.user_name || t('unknownUser', 'Unknown user'));
+		appendCell(row, sourceLabel(batch.source));
+		appendCell(row, String(batch.item_count));
+		appendCell(row, String(batch.change_count));
+		appendCell(row, batch.summary || '');
+		var action = document.createElement('td');
+		var button = document.createElement('button');
+		button.type = 'button';
+		button.className = 'button';
+		button.textContent = t('expandBatch', 'Show changes');
+		button.setAttribute('aria-expanded', 'false');
+		var detail = document.createElement('tr');
+		detail.hidden = true;
+		var detailCell = document.createElement('td');
+		detailCell.colSpan = 7;
+		detail.appendChild(detailCell);
+		button.addEventListener('click', function () {
+			var open = detail.hidden;
+			detail.hidden = !open;
+			button.setAttribute('aria-expanded', open ? 'true' : 'false');
+			button.textContent = open ? t('collapseBatch', 'Hide changes') : t('expandBatch', 'Show changes');
+			if (open && !detailCell.childNodes.length) {
+				loadBatch(batch.batch_id, detailCell);
+			}
+		});
+		action.appendChild(button);
+		// Phase 6 inserts the Undo batch button in this cell. Do not render it in this phase.
+		row.appendChild(action);
+		var fragment = document.createDocumentFragment();
+		fragment.appendChild(row);
+		fragment.appendChild(detail);
+		return fragment;
+	}
+
+	function loadBatch(batchId, cell) {
+		cell.textContent = t('logLoading', 'Loading history...');
+		fetchLog({ batch_id: batchId }).then(function (result) {
+			cell.textContent = '';
+			if (!result.response.ok) {
+				cell.textContent = t('logError', 'The history could not be loaded. Try again.');
+				return;
+			}
+			renderEntries(cell, result.body && result.body.entries ? result.body.entries : []);
+		}).catch(function () {
+			cell.textContent = t('logError', 'The history could not be loaded. Try again.');
+		});
+	}
+
+	function renderEntries(cell, entries) {
+		var table = document.createElement('table');
+		table.className = 'low-pte-history-entries';
+		var head = document.createElement('tr');
+		[t('columnProduct', 'Product'), t('logField', 'Field'), t('logOld', 'Old'), t('logNew', 'New'), ''].forEach(function (label) {
+			var th = document.createElement('th');
+			th.textContent = label;
+			th.scope = 'col';
+			head.appendChild(th);
+		});
+		table.appendChild(head);
+		entries.forEach(function (entry) {
+			var row = document.createElement('tr');
+			if (entry.undone_at) {
+				row.className = 'low-pte-log-undone';
+			}
+			appendCell(row, entry.product_name || String(entry.product_id));
+			appendCell(row, fieldLabel(entry.field));
+			row.appendChild(valueCell(entry.field, entry.old_value));
+			row.appendChild(valueCell(entry.field, entry.new_value));
+			var marker = document.createElement('td');
+			marker.textContent = entry.undone_at ? t('logUndone', 'Undone') : '';
+			row.appendChild(marker);
+			table.appendChild(row);
+		});
+		cell.appendChild(table);
+	}
+
+	function valueCell(fieldName, value) {
+		var cell = document.createElement('td');
+		if (value === null || value === undefined || value === '') {
+			cell.textContent = '';
+			return cell;
+		}
+		var text = String(value);
+		var longField = fieldName === 'description' || fieldName === 'short_description';
+		if (!longField || text.length <= 80) {
+			cell.textContent = text;
+			return cell;
+		}
+		cell.textContent = text.slice(0, 80) + '... ';
+		var view = document.createElement('button');
+		view.type = 'button';
+		view.className = 'button-link';
+		view.textContent = t('viewValue', 'View');
+		view.addEventListener('click', function () {
+			openValueModal(fieldLabel(fieldName), text, view);
+		});
+		cell.appendChild(view);
+		return cell;
+	}
+
+	function openValueModal(title, text, returnTo) {
+		closeModal(false);
+		modalEl = document.createElement('div');
+		modalEl.className = 'low-pte-modal';
+		modalEl.setAttribute('role', 'dialog');
+		modalEl.setAttribute('aria-modal', 'true');
+		var card = document.createElement('div');
+		card.className = 'low-pte-modal-card';
+		var heading = document.createElement('h2');
+		heading.className = 'low-pte-modal-title';
+		heading.textContent = title;
+		var body = document.createElement('pre');
+		body.className = 'low-pte-log-value';
+		body.textContent = text;
+		var close = document.createElement('button');
+		close.type = 'button';
+		close.className = 'button';
+		close.textContent = t('close', 'Close');
+		close.addEventListener('click', function () {
+			closeModal(false);
+			if (returnTo) {
+				returnTo.focus();
+			}
+		});
+		card.appendChild(heading);
+		card.appendChild(body);
+		card.appendChild(close);
+		modalEl.appendChild(card);
+		modalEl.addEventListener('keydown', function (event) {
+			if (event.key === 'Escape') {
+				close.click();
+			}
+		});
+		document.body.appendChild(modalEl);
+		close.focus();
+	}
+
+	function renderHistoryPager(total, page) {
+		var pages = Math.max(1, Math.ceil(total / state.log_per_page));
+		historyPager.textContent = '';
+		if (pages < 2) {
+			historyPager.hidden = true;
+			return;
+		}
+		historyPager.hidden = false;
+		var prev = document.createElement('button');
+		prev.type = 'button';
+		prev.className = 'button';
+		prev.textContent = t('prev', 'Previous');
+		prev.disabled = page <= 1;
+		prev.addEventListener('click', function () {
+			state.log_page = Math.max(1, page - 1);
+			writeUrl('push');
+			loadHistory();
+		});
+		var label = document.createElement('span');
+		label.textContent = t('pageNumber', 'Page %s').replace('%s', String(page));
+		var next = document.createElement('button');
+		next.type = 'button';
+		next.className = 'button';
+		next.textContent = t('next', 'Next');
+		next.disabled = page >= pages;
+		next.addEventListener('click', function () {
+			state.log_page = page + 1;
+			writeUrl('push');
+			loadHistory();
+		});
+		historyPager.appendChild(prev);
+		historyPager.appendChild(label);
+		historyPager.appendChild(next);
+	}
+
+	function appendCell(row, text) {
+		var cell = document.createElement('td');
+		cell.textContent = text;
+		row.appendChild(cell);
+	}
+
+	function formatWhen(value) {
+		var parsed = Date.parse(String(value || '').replace(' ', 'T') + 'Z');
+		if (!Number.isFinite(parsed)) {
+			return value ? String(value) : '';
+		}
+		return new Date(parsed).toLocaleString();
+	}
+
+	function sourceLabel(source) {
+		if (source === 'bulk') {
+			return t('sourceBulk', 'Bulk');
+		}
+		if (source === 'undo') {
+			return t('sourceUndo', 'Undo');
+		}
+		return t('sourceInline', 'Inline');
+	}
+
+	function fieldLabel(fieldName) {
+		var map = {
+			regular_price: t('columnRegularPrice', 'Regular price'),
+			sale_price: t('columnSalePrice', 'Sale price'),
+			sku: t('columnSku', 'SKU'),
+			weight: t('columnWeight', 'Weight'),
+			manage_stock: t('columnManageStock', 'Manage stock'),
+			stock_quantity: t('columnQuantity', 'Quantity'),
+			stock_status: t('columnStock', 'Stock'),
+			name: t('columnProduct', 'Product'),
+			status: t('columnStatus', 'Status'),
+			catalog_visibility: t('columnVisibility', 'Catalog visibility'),
+			description: t('descriptionTitle', 'Description'),
+			short_description: t('shortDescription', 'Short description')
+		};
+		return Object.prototype.hasOwnProperty.call(map, fieldName) ? map[fieldName] : String(fieldName || '');
 	}
 }());

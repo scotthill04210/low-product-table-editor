@@ -108,6 +108,131 @@ class Rest_Controller {
 				'permission_callback' => array( $this, 'permissions_check' ),
 			)
 		);
+
+		register_rest_route(
+			'low-pte/v1',
+			'/log',
+			array(
+				'methods'             => \WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_log' ),
+				'permission_callback' => array( $this, 'permissions_check' ),
+			)
+		);
+	}
+
+	/**
+	 * Return one page of log batches, or the entries in one batch.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function get_log( \WP_REST_Request $request ): \WP_REST_Response|\WP_Error {
+		$batch_id = $request->get_param( 'batch_id' );
+		$batch_id = is_string( $batch_id ) ? trim( $batch_id ) : '';
+
+		if ( '' !== $batch_id ) {
+			if ( ! preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $batch_id ) ) {
+				return new \WP_Error(
+					'rest_invalid_param',
+					__( 'Batch ID is not valid.', 'low-product-table-editor' ),
+					array( 'status' => 400 )
+				);
+			}
+
+			$repository = new Log_Repository();
+
+			return rest_ensure_response(
+				array(
+					'batch_id' => $batch_id,
+					'entries'  => $repository->get_batch_entries( $batch_id ),
+				)
+			);
+		}
+
+		$date_from = $this->date_param( $request, 'date_from' );
+		$date_to   = $this->date_param( $request, 'date_to' );
+
+		if ( is_wp_error( $date_from ) ) {
+			return $date_from;
+		}
+
+		if ( is_wp_error( $date_to ) ) {
+			return $date_to;
+		}
+
+		$per_page = (int) $request->get_param( 'per_page' );
+		if ( ! in_array( $per_page, array( 10, 20, 50 ), true ) ) {
+			$per_page = 20;
+		}
+
+		$page    = max( 1, (int) $request->get_param( 'page' ) );
+		$user_id = absint( $request->get_param( 'user' ) );
+		$product = $request->get_param( 'product' );
+		$product = is_scalar( $product ) ? trim( (string) $product ) : '';
+
+		$filters = array(
+			'user_id'   => $user_id,
+			'date_from' => $date_from,
+			'date_to'   => $date_to,
+			'page'      => $page,
+			'per_page'  => $per_page,
+		);
+
+		if ( '' !== $product ) {
+			$product_ids = $this->products->ids_for_log_filter( $product );
+			if ( array() === $product_ids ) {
+				$repository = new Log_Repository();
+
+				return rest_ensure_response(
+					array(
+						'batches'  => array(),
+						'total'    => 0,
+						'page'     => $page,
+						'per_page' => $per_page,
+						'users'    => $repository->users(),
+					)
+				);
+			}
+			$filters['product_ids'] = $product_ids;
+		}
+
+		$repository       = new Log_Repository();
+		$data             = $repository->get_batches( $filters );
+		$data['page']     = $page;
+		$data['per_page'] = $per_page;
+
+		return rest_ensure_response( $data );
+	}
+
+	/**
+	 * Validate an optional Y-m-d query value.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @param string           $key     Parameter name.
+	 * @return string|\WP_Error Empty string when the parameter is omitted.
+	 */
+	private function date_param( \WP_REST_Request $request, string $key ): string|\WP_Error {
+		$value = $request->get_param( $key );
+		if ( null === $value || '' === $value ) {
+			return '';
+		}
+
+		$value = is_scalar( $value ) ? trim( (string) $value ) : '';
+		$parts = preg_match( '/^(\d{4})-(\d{2})-(\d{2})$/', $value, $matches ) ? $matches : array();
+
+		if ( array() === $parts || ! checkdate( (int) $parts[2], (int) $parts[3], (int) $parts[1] ) ) {
+			return new \WP_Error(
+				'rest_invalid_param',
+				__( 'Use dates in YYYY-MM-DD format.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return $value;
 	}
 
 	/**

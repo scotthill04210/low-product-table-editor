@@ -62,6 +62,11 @@ class Plugin {
 		$updater = new Updater();
 		$updater->register();
 
+		$installer = new Installer();
+		$installer->maybe_install();
+		add_action( 'low_pte_daily_purge', array( Installer::class, 'purge_expired' ) );
+		add_action( 'admin_init', array( Installer::class, 'ensure_cron' ) );
+
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			add_action( 'admin_notices', array( $this, 'woocommerce_missing_notice' ) );
 			return;
@@ -117,6 +122,10 @@ class Plugin {
 	 */
 	public static function activate(): void {
 		update_option( 'low_pte_version', LOW_PTE_VERSION, false );
+
+		$installer = new Installer();
+		$installer->maybe_install();
+		Installer::ensure_cron();
 	}
 
 	/**
@@ -129,5 +138,6 @@ class Plugin {
 	 * @return void
 	 */
 	public static function deactivate(): void {
+		wp_clear_scheduled_hook( 'low_pte_daily_purge' );
 	}
 }

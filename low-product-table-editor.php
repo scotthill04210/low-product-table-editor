@@ -19,6 +19,7 @@ declare( strict_types=1 );
 defined( 'ABSPATH' ) || exit;
 
 define( 'LOW_PTE_VERSION', '0.1.1' );
+define( 'LOW_PTE_DB_VERSION', '1' );
 define( 'LOW_PTE_FILE', __FILE__ );
 define( 'LOW_PTE_DIR', plugin_dir_path( __FILE__ ) );
 define( 'LOW_PTE_URL', plugin_dir_url( __FILE__ ) );

@@ -178,7 +178,7 @@ class Product_Service {
 	 * @since 0.1.1
 	 *
 	 * @param array<int, mixed> $items Requested items.
-	 * @return array{results: array<int, array<string, mixed>>}
+	 * @return array{results: array<int, array<string, mixed>>, batch_id: string|null, log_failed: bool}
 	 */
 	public function update_items( array $items ): array {
 		$plans = array();
@@ -187,19 +187,96 @@ class Product_Service {
 			$plans[] = $this->plan_item( $item );
 		}
 
-		$results = array();
+		$results  = array();
+		$entries  = array();
+		$batch_id = null;
+
 		foreach ( $plans as $plan ) {
 			if ( 'ready' !== $plan['status'] ) {
 				$results[] = $plan['result'];
 				continue;
 			}
 
-			$results[] = $this->write_item( $plan['id'], $plan['fields'] );
+			$written   = $this->write_item( $plan['id'], $plan['fields'] );
+			$results[] = $written['result'];
+
+			if ( array() === $written['entries'] ) {
+				continue;
+			}
+
+			if ( null === $batch_id ) {
+				$batch_id = ( new Log_Repository() )->new_batch_id();
+			}
+
+			foreach ( $written['entries'] as $entry ) {
+				$entries[] = $entry;
+			}
+		}
+
+		$log_failed = false;
+		if ( array() !== $entries && is_string( $batch_id ) ) {
+			$log_failed = ! $this->log_changes( $batch_id, 'inline', $entries );
+		} else {
+			$batch_id = null;
 		}
 
 		return array(
-			'results' => $results,
+			'results'    => $results,
+			'batch_id'   => $batch_id,
+			'log_failed' => $log_failed,
 		);
+	}
+
+	/**
+	 * Record a batch of field changes. A failed insert does not undo the save.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string            $batch_id Batch identifier.
+	 * @param string            $source   inline, bulk, or undo.
+	 * @param array<int, mixed> $entries  Changed fields.
+	 * @return bool
+	 */
+	public function log_changes( string $batch_id, string $source, array $entries ): bool {
+		$repository = new Log_Repository();
+		$saved      = $repository->insert_entries( $batch_id, get_current_user_id(), $source, $entries );
+
+		if ( ! $saved ) {
+			global $wpdb;
+
+			$message = isset( $wpdb->last_error ) ? (string) $wpdb->last_error : '';
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- The product save already succeeded. The log failure has to be visible to the site operator.
+			error_log( 'LOW Product Table Editor: ' . $message );
+		}
+
+		return $saved;
+	}
+
+	/**
+	 * Product and variation IDs for a History search.
+	 *
+	 * Uses the same product search as the table, and includes variations of matched parents.
+	 * A numeric term also matches that ID directly.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string $term Search text or a product ID.
+	 * @return array<int, int>
+	 */
+	public function ids_for_log_filter( string $term ): array {
+		$term = trim( $term );
+		if ( '' === $term ) {
+			return array();
+		}
+
+		$parents = $this->parent_ids_for_search( $term );
+		$ids     = array_merge( $parents, $this->variation_ids_for_parents( $parents ) );
+
+		if ( ctype_digit( $term ) ) {
+			$ids[] = (int) $term;
+		}
+
+		return array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
 	}
 
 	/**
@@ -980,27 +1057,44 @@ class Product_Service {
 	 *
 	 * @param int                  $id     Product or variation ID.
 	 * @param array<string, mixed> $fields Edited fields.
-	 * @return array<string, mixed>
+	 * @return array{result: array<string, mixed>, entries: array<int, array<string, mixed>>}
 	 */
 	private function write_item( int $id, array $fields ): array {
+		$empty = static function ( array $result ): array {
+			return array(
+				'result'  => $result,
+				'entries' => array(),
+			);
+		};
+
 		$product = $this->reload_product( $id );
 		if ( ! $product instanceof \WC_Product || ! $this->is_supported_product( $product ) ) {
-			return $this->item_result( $id, 'error', __( 'Product not found.', 'low-product-table-editor' ), array(), null );
+			return $empty( $this->item_result( $id, 'error', __( 'Product not found.', 'low-product-table-editor' ), array(), null ) );
 		}
 
 		$checked = $this->validate_fields( $product, $fields );
 		if ( array() !== $checked['errors'] ) {
-			return $this->item_result(
-				$id,
-				'error',
-				__( 'Some fields could not be saved.', 'low-product-table-editor' ),
-				$checked['errors'],
-				$this->row_for( $product )
+			return $empty(
+				$this->item_result(
+					$id,
+					'error',
+					__( 'Some fields could not be saved.', 'low-product-table-editor' ),
+					$checked['errors'],
+					$this->row_for( $product )
+				)
 			);
 		}
 
+		$before = array();
+		foreach ( array_keys( $checked['values'] ) as $field_name ) {
+			$before[ $field_name ] = $this->log_value( $field_name, $this->current_field( $product, $field_name ) );
+		}
+
+		$changed = false;
+
 		try {
-			if ( $this->apply_fields( $product, $checked['values'] ) ) {
+			$changed = $this->apply_fields( $product, $checked['values'] );
+			if ( $changed ) {
 				$product->save();
 			}
 		} catch ( \WC_Data_Exception $exception ) {
@@ -1011,12 +1105,14 @@ class Product_Service {
 				$errors['sku'] = $message;
 			}
 
-			return $this->item_result(
-				$id,
-				'error',
-				$message,
-				$errors,
-				$reloaded instanceof \WC_Product ? $this->row_for( $reloaded ) : null
+			return $empty(
+				$this->item_result(
+					$id,
+					'error',
+					$message,
+					$errors,
+					$reloaded instanceof \WC_Product ? $this->row_for( $reloaded ) : null
+				)
 			);
 		} catch ( \Throwable $exception ) {
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
@@ -1026,12 +1122,14 @@ class Product_Service {
 
 			$reloaded = $this->reload_product( $id );
 
-			return $this->item_result(
-				$id,
-				'error',
-				__( 'The changes could not be saved.', 'low-product-table-editor' ),
-				array(),
-				$reloaded instanceof \WC_Product ? $this->row_for( $reloaded ) : null
+			return $empty(
+				$this->item_result(
+					$id,
+					'error',
+					__( 'The changes could not be saved.', 'low-product-table-editor' ),
+					array(),
+					$reloaded instanceof \WC_Product ? $this->row_for( $reloaded ) : null
+				)
 			);
 		}
 
@@ -1046,7 +1144,28 @@ class Product_Service {
 			}
 		}
 
-		return $this->item_result( $id, 'ok', '', array(), $this->row_for( $source ), $parent );
+		$entries = array();
+		if ( $changed ) {
+			$parent_id = $source->is_type( 'variation' ) ? $source->get_parent_id() : 0;
+			foreach ( $before as $field_name => $old_value ) {
+				$new_value = $this->log_value( $field_name, $this->current_field( $source, $field_name ) );
+				if ( $old_value === $new_value ) {
+					continue;
+				}
+				$entries[] = array(
+					'product_id' => $id,
+					'parent_id'  => $parent_id,
+					'field'      => $field_name,
+					'old'        => $old_value,
+					'new'        => $new_value,
+				);
+			}
+		}
+
+		return array(
+			'result'  => $this->item_result( $id, 'ok', '', array(), $this->row_for( $source ), $parent ),
+			'entries' => $entries,
+		);
 	}
 
 	/**
@@ -1726,6 +1845,41 @@ class Product_Service {
 		}
 
 		return (string) $current === (string) $next;
+	}
+
+	/**
+	 * Normalize one field for the audit log.
+	 *
+	 * Booleans are yes or no. Inherited stock stays parent. Null stays null.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string $field Field name.
+	 * @param mixed  $value Stored value.
+	 * @return string|null
+	 */
+	private function log_value( string $field, mixed $value ): ?string {
+		if ( 'manage_stock' === $field ) {
+			if ( 'parent' === $value ) {
+				return 'parent';
+			}
+
+			return $value ? 'yes' : 'no';
+		}
+
+		if ( 'stock_quantity' === $field ) {
+			if ( null === $value || '' === $value ) {
+				return null;
+			}
+
+			return is_scalar( $value ) ? (string) $value : null;
+		}
+
+		if ( null === $value ) {
+			return null;
+		}
+
+		return is_scalar( $value ) ? (string) $value : '';
 	}
 
 	/**

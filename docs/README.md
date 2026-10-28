@@ -1,6 +1,6 @@
 # LOW Product Table Editor: Cursor Prompts
 
-Current release: **0.1.1**. Phase 1 (scaffold), phase 2 (read-only grid), phase 3 (inline editing), and the GitHub updater (phase 8) are in the working tree. The published 0.1.1 zip has phase 1 and the updater. Phases 4 through 7 are not built yet.
+Current release: **0.1.1**. Phase 1 (scaffold), phase 2 (read-only grid), phase 3 (inline editing), phase 4 (audit log), and the GitHub updater (phase 8) are in the working tree. The published 0.1.1 zip has phase 1 and the updater. Phases 5 through 7 are not built yet.
 
 Each file in this folder is one self-contained Cursor prompt. Paste the whole file into Cursor, one phase at a time. Do not start a phase until the previous one passes its acceptance checks.
 

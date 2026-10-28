@@ -35,6 +35,7 @@ class Admin_Page {
 	public function register(): void {
 		add_action( 'admin_menu', array( $this, 'register_menu' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue' ) );
+		add_action( 'admin_post_low_pte_save_settings', array( $this, 'save_settings' ) );
 	}
 
 	/**
@@ -77,18 +78,23 @@ class Admin_Page {
 			);
 		}
 
+		$low_pte_settings_saved = isset( $_GET['low_pte_settings'] ) && 'saved' === sanitize_key( wp_unslash( (string) $_GET['low_pte_settings'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display flag set after a nonce-checked settings save.
+
 		?>
 		<div class="wrap low-pte-wrap">
 			<h1><?php esc_html_e( 'Table Editor', 'low-product-table-editor' ); ?></h1>
+			<?php if ( $low_pte_settings_saved ) : ?>
+				<div class="notice notice-success is-dismissible">
+					<p><?php esc_html_e( 'Log settings saved.', 'low-product-table-editor' ); ?></p>
+				</div>
+			<?php endif; ?>
 			<div class="low-pte-tabs" role="tablist" aria-label="<?php esc_attr_e( 'Editor sections', 'low-product-table-editor' ); ?>">
-				<button type="button" class="low-pte-tab low-pte-tab-active" role="tab" id="low-pte-tab-table" aria-selected="true" aria-controls="low-pte-app">
+				<button type="button" class="low-pte-tab low-pte-tab-active" role="tab" id="low-pte-tab-table" aria-selected="true" aria-controls="low-pte-table-panel">
 					<?php esc_html_e( 'Table', 'low-product-table-editor' ); ?>
 				</button>
-				<span class="low-pte-tab-slot" title="<?php esc_attr_e( 'Available in a later release', 'low-product-table-editor' ); ?>">
-					<button type="button" class="low-pte-tab" role="tab" id="low-pte-tab-history" aria-selected="false" aria-disabled="true" aria-controls="low-pte-app" disabled="disabled" title="<?php esc_attr_e( 'Available in a later release', 'low-product-table-editor' ); ?>">
-						<?php esc_html_e( 'History', 'low-product-table-editor' ); ?>
-					</button>
-				</span>
+				<button type="button" class="low-pte-tab" role="tab" id="low-pte-tab-history" aria-selected="false" aria-controls="low-pte-history">
+					<?php esc_html_e( 'History', 'low-product-table-editor' ); ?>
+				</button>
 			</div>
 			<div id="low-pte-app" class="low-pte-app" aria-live="polite">
 				<p class="low-pte-loading"><?php esc_html_e( 'Loading editor...', 'low-product-table-editor' ); ?></p>
@@ -230,6 +236,51 @@ class Admin_Page {
 	}
 
 	/**
+	 * Save retention and uninstall options, then return to History.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @return void
+	 */
+	public function save_settings(): void {
+		if ( ! current_user_can( 'manage_woocommerce' ) ) { // phpcs:ignore WordPress.WP.Capabilities.Unknown -- WooCommerce capability.
+			wp_die(
+				esc_html__( 'Sorry, you are not allowed to access this page.', 'low-product-table-editor' ),
+				esc_html__( 'Not allowed', 'low-product-table-editor' ),
+				array(
+					'response' => 403,
+				)
+			);
+		}
+
+		check_admin_referer( 'low_pte_save_settings', 'low_pte_settings_nonce' );
+
+		$raw_days = isset( $_POST['low_pte_retention_days'] ) ? sanitize_text_field( wp_unslash( $_POST['low_pte_retention_days'] ) ) : '180';
+		$days     = absint( is_scalar( $raw_days ) ? $raw_days : 180 );
+		if ( $days < 1 || $days > 3650 ) {
+			$days = 180;
+		}
+
+		$delete_log = isset( $_POST['low_pte_delete_data_on_uninstall'] ) ? 'yes' : 'no';
+
+		update_option( 'low_pte_retention_days', $days, false );
+		update_option( 'low_pte_delete_data_on_uninstall', $delete_log, false );
+
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'post_type'        => 'product',
+					'page'             => 'low-pte',
+					'tab'              => 'history',
+					'low_pte_settings' => 'saved',
+				),
+				admin_url( 'edit.php' )
+			)
+		);
+		exit;
+	}
+
+	/**
 	 * Data passed to the admin app.
 	 *
 	 * @since 0.1.0
@@ -237,6 +288,11 @@ class Admin_Page {
 	 * @return array<string, mixed>
 	 */
 	private function script_config(): array {
+		$retention = (int) get_option( 'low_pte_retention_days', 180 );
+		if ( $retention < 1 || $retention > 3650 ) {
+			$retention = 180;
+		}
+
 		return array(
 			'restUrl'        => rest_url( 'low-pte/v1/' ),
 			'nonce'          => wp_create_nonce( 'wp_rest' ),
@@ -244,12 +300,49 @@ class Admin_Page {
 			'defaultPerPage' => 25,
 			'version'        => LOW_PTE_VERSION,
 			'categories'     => $this->categories(),
+			'settings'       => array(
+				'actionUrl'     => admin_url( 'admin-post.php' ),
+				'nonce'         => wp_create_nonce( 'low_pte_save_settings' ),
+				'retentionDays' => $retention,
+				'deleteData'    => 'yes' === get_option( 'low_pte_delete_data_on_uninstall', 'no' ),
+			),
 			'i18n'           => array(
 				'loading'              => __( 'Loading editor...', 'low-product-table-editor' ),
 				'title'                => __( 'Table Editor', 'low-product-table-editor' ),
 				'table'                => __( 'Table', 'low-product-table-editor' ),
 				'history'              => __( 'History', 'low-product-table-editor' ),
 				'historyTooltip'       => __( 'Available in a later release', 'low-product-table-editor' ),
+				'logWhen'              => __( 'When', 'low-product-table-editor' ),
+				'logWho'               => __( 'Who', 'low-product-table-editor' ),
+				'logSource'            => __( 'Source', 'low-product-table-editor' ),
+				'logItems'             => __( 'Items', 'low-product-table-editor' ),
+				'logChanges'           => __( 'Changes', 'low-product-table-editor' ),
+				'logSummary'           => __( 'Summary', 'low-product-table-editor' ),
+				'logField'             => __( 'Field', 'low-product-table-editor' ),
+				'logOld'               => __( 'Old', 'low-product-table-editor' ),
+				'logNew'               => __( 'New', 'low-product-table-editor' ),
+				'logUndone'            => __( 'Undone', 'low-product-table-editor' ),
+				'logEmpty'             => __( 'No changes have been logged.', 'low-product-table-editor' ),
+				'logError'             => __( 'The history could not be loaded. Try again.', 'low-product-table-editor' ),
+				'logLoading'           => __( 'Loading history...', 'low-product-table-editor' ),
+				'sourceInline'         => __( 'Inline', 'low-product-table-editor' ),
+				'sourceBulk'           => __( 'Bulk', 'low-product-table-editor' ),
+				'sourceUndo'           => __( 'Undo', 'low-product-table-editor' ),
+				'allUsers'             => __( 'All users', 'low-product-table-editor' ),
+				'user'                 => __( 'User', 'low-product-table-editor' ),
+				'product'              => __( 'Product', 'low-product-table-editor' ),
+				'dateFrom'             => __( 'Date from', 'low-product-table-editor' ),
+				'dateTo'               => __( 'Date to', 'low-product-table-editor' ),
+				'unknownUser'          => __( 'Unknown user', 'low-product-table-editor' ),
+				'viewValue'            => __( 'View', 'low-product-table-editor' ),
+				'close'                => __( 'Close', 'low-product-table-editor' ),
+				'logSettings'          => __( 'Log settings', 'low-product-table-editor' ),
+				'retentionDays'        => __( 'Keep log entries for this many days', 'low-product-table-editor' ),
+				'deleteLogOnUninstall' => __( 'Delete the log table when the plugin is deleted', 'low-product-table-editor' ),
+				'saveSettings'         => __( 'Save settings', 'low-product-table-editor' ),
+				'expandBatch'          => __( 'Show changes', 'low-product-table-editor' ),
+				'collapseBatch'        => __( 'Hide changes', 'low-product-table-editor' ),
+				'logFailed'            => __( 'Saved, but the change could not be logged, so it cannot be undone.', 'low-product-table-editor' ),
 				'noscript'             => __( 'The table editor requires JavaScript.', 'low-product-table-editor' ),
 				'sections'             => __( 'Editor sections', 'low-product-table-editor' ),
 				'search'               => __( 'Search', 'low-product-table-editor' ),
