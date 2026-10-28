@@ -511,6 +511,27 @@ class Admin_Page {
 				'discard'               => __( 'Discard', 'low-product-table-editor' ),
 				// translators: %s: number of saved items.
 				'savedItems'            => __( 'Saved %s items.', 'low-product-table-editor' ),
+				'undo'                  => __( 'Undo', 'low-product-table-editor' ),
+				// translators: %s: number of restored changes.
+				'restoredChanges'       => __( 'Restored %s changes.', 'low-product-table-editor' ),
+				// translators: %s: number of changes that were left alone.
+				'undoSkippedSince'      => __( '%s could not be restored because they changed since. See History.', 'low-product-table-editor' ),
+				'undoBatch'             => __( 'Undo batch', 'low-product-table-editor' ),
+				'undoThisBatch'         => __( 'Undo this batch', 'low-product-table-editor' ),
+				'undoConfirmTitle'      => __( 'Undo this batch?', 'low-product-table-editor' ),
+				// translators: 1: number of changes, 2: number of items.
+				'undoConfirmBody'       => __( 'This restores %1$s changes across %2$s items. Anything changed since will be left alone and reported.', 'low-product-table-editor' ),
+				'partlyUndone'          => __( 'Partly undone', 'low-product-table-editor' ),
+				'undoResultTitle'       => __( 'Undo result', 'low-product-table-editor' ),
+				'reasonChangedSince'    => __( 'Changed since this edit, left as is', 'low-product-table-editor' ),
+				'reasonMissing'         => __( 'Item no longer exists', 'low-product-table-editor' ),
+				'reasonForbidden'       => __( 'You cannot edit this item', 'low-product-table-editor' ),
+				'undoViewHistory'       => __( 'View this undo in History', 'low-product-table-editor' ),
+				'undoDirtyDropped'      => __( 'Affected rows reloaded. Unsaved edits on those rows were dropped.', 'low-product-table-editor' ),
+				'undoFailed'            => __( 'The undo could not be completed.', 'low-product-table-editor' ),
+				'undoProduct'           => __( 'Product', 'low-product-table-editor' ),
+				'undoField'             => __( 'Field', 'low-product-table-editor' ),
+				'undoReason'            => __( 'Reason', 'low-product-table-editor' ),
 				'saveOrDiscard'         => __( 'Save or discard changes before leaving this page of results.', 'low-product-table-editor' ),
 				'saveFailed'            => __( 'The changes could not be saved.', 'low-product-table-editor' ),
 				'regularRequired'       => __( 'Regular price is required.', 'low-product-table-editor' ),

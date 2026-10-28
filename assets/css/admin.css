@@ -363,16 +363,67 @@
 }
 
 .low-pte-toast {
+	align-items: center;
 	background: #1d2327;
 	border-radius: 2px;
 	bottom: 72px;
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 	color: #fff;
-	max-width: 360px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	max-width: 420px;
 	padding: 10px 14px;
 	position: fixed;
 	right: 24px;
 	z-index: 100000;
+}
+
+.low-pte-toast-undo {
+	background: transparent;
+	border: 0;
+	color: #72aee6;
+	cursor: pointer;
+	font-weight: 600;
+	padding: 0;
+	text-decoration: underline;
+}
+
+.low-pte-toast-undo:focus {
+	outline: 2px solid #72aee6;
+	outline-offset: 2px;
+}
+
+.low-pte-toast[hidden] {
+	display: none;
+}
+
+.low-pte-undo-badge {
+	background: #f0f0f1;
+	border-radius: 2px;
+	display: inline-block;
+	font-size: 11px;
+	line-height: 1.6;
+	margin-left: 6px;
+	padding: 0 6px;
+	vertical-align: middle;
+}
+
+.low-pte-log-actions .button {
+	margin: 0 6px 0 0;
+}
+
+.low-pte-undo-table {
+	border-collapse: collapse;
+	width: 100%;
+}
+
+.low-pte-undo-table th,
+.low-pte-undo-table td {
+	border-bottom: 1px solid #dcdcde;
+	padding: 6px 8px;
+	text-align: left;
+	vertical-align: top;
 }
 
 .low-pte-modal {

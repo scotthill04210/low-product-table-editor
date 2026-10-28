@@ -387,7 +387,7 @@
 		function next(index) {
 			if (stopAfterChunk || index >= chunks) {
 				applying = false;
-				showReport(totals, problems, itemIds.slice(processed), logFailed, failedMessage, stopped || stopAfterChunk);
+				showReport(totals, problems, itemIds.slice(processed), logFailed, failedMessage, stopped || stopAfterChunk, batchId);
 				return;
 			}
 			var slice = itemIds.slice(index * chunkSize, (index + 1) * chunkSize);
@@ -398,7 +398,7 @@
 				if (!result || !result.response || !result.response.ok) {
 					applying = false;
 					failedMessage = messageFrom(result && result.body) || t('bulkChunkFailed', 'A chunk could not be applied. The items below were not changed.');
-					showReport(totals, problems, itemIds.slice(processed), logFailed, failedMessage, true);
+					showReport(totals, problems, itemIds.slice(processed), logFailed, failedMessage, true, batchId);
 					return;
 				}
 				var body = result.body || {};
@@ -433,7 +433,7 @@
 				itemIds.slice(index * chunkSize).forEach(function (id) {
 					problems.push({ id: id, name: '', field: '', status: 'not_applied', reason: 'not_applied' });
 				});
-				showReport(totals, problems, [], logFailed, failedMessage, true);
+				showReport(totals, problems, [], logFailed, failedMessage, true, batchId);
 			});
 		}
 
@@ -486,7 +486,7 @@
 		return card;
 	}
 
-	function showReport(totals, problems, remaining, logFailed, failedMessage, stopped) {
+	function showReport(totals, problems, remaining, logFailed, failedMessage, stopped, batchId) {
 		closeModal(false);
 		remaining.forEach(function (id) {
 			problems.push({ id: id, name: '', field: '', status: 'not_applied', reason: 'not_applied' });
@@ -525,7 +525,23 @@
 			});
 			actions.appendChild(download);
 		}
-		// Phase 6 inserts the Undo this batch button here. Do not render it in this phase.
+		var changedFields = 0;
+		Object.keys(totals.fields || {}).forEach(function (key) {
+			var entry = totals.fields[key];
+			if (entry && entry.status === 'changed') {
+				changedFields += Number(entry.count) || 0;
+			}
+		});
+		if (batchId && totals.changed > 0 && !logFailed && host.requestUndo) {
+			var undoBatch = document.createElement('button');
+			undoBatch.type = 'button';
+			undoBatch.className = 'button';
+			undoBatch.textContent = t('undoThisBatch', 'Undo this batch');
+			undoBatch.addEventListener('click', function () {
+				host.requestUndo(batchId, changedFields, totals.changed, undoBatch);
+			});
+			actions.appendChild(undoBatch);
+		}
 		var close = document.createElement('button');
 		close.type = 'button';
 		close.className = 'button button-primary';

@@ -47,6 +47,11 @@
 	var discardButton;
 	var toastEl;
 	var toastTimer = 0;
+	var toastRemaining = 0;
+	var toastStarted = 0;
+	var toastHover = false;
+	var toastFocus = false;
+	var historyFocusBatch = '';
 	var saving = false;
 	var dirty = new Map();
 	var selectedIds = new Set();
@@ -742,6 +747,7 @@
 
 			setTreeButtons(true);
 			updateSelectionUi();
+			reapplyDirty();
 		} catch (error) {
 			table = null;
 			gridEl.replaceChildren();
@@ -1285,13 +1291,88 @@
 		return true;
 	}
 
-	function showToast(message) {
+	function showToast(message, duration) {
+		window.clearTimeout(toastTimer);
+		toastTimer = 0;
+		toastHover = false;
+		toastFocus = false;
+		toastEl.onmouseenter = null;
+		toastEl.onmouseleave = null;
+		toastEl.onfocusin = null;
+		toastEl.onfocusout = null;
 		toastEl.hidden = false;
 		toastEl.textContent = message;
+		toastRemaining = duration || 5000;
+		armToast(toastRemaining);
+	}
+
+	function armToast(ms) {
+		toastRemaining = ms;
+		toastStarted = Date.now();
 		window.clearTimeout(toastTimer);
 		toastTimer = window.setTimeout(function () {
+			toastTimer = 0;
+			if (toastHover || toastFocus) {
+				return;
+			}
 			toastEl.hidden = true;
-		}, 5000);
+		}, ms);
+	}
+
+	function pauseToast() {
+		if (!toastTimer) {
+			return;
+		}
+		toastRemaining = Math.max(0, toastRemaining - (Date.now() - toastStarted));
+		window.clearTimeout(toastTimer);
+		toastTimer = 0;
+	}
+
+	function resumeToast() {
+		if (toastEl.hidden || toastHover || toastFocus) {
+			return;
+		}
+		if (toastRemaining <= 0) {
+			toastEl.hidden = true;
+			return;
+		}
+		armToast(toastRemaining);
+	}
+
+	function showUndoToast(savedCount, batchIds) {
+		window.clearTimeout(toastTimer);
+		toastTimer = 0;
+		toastEl.replaceChildren();
+		toastEl.hidden = false;
+		var text = document.createElement('span');
+		text.textContent = t('savedItems', 'Saved %s items.').replace('%s', String(savedCount));
+		var button = document.createElement('button');
+		button.type = 'button';
+		button.className = 'low-pte-toast-undo';
+		button.textContent = t('undo', 'Undo');
+		button.addEventListener('click', function () {
+			button.disabled = true;
+			runUndo(batchIds, { toast: true });
+		});
+		toastEl.appendChild(text);
+		toastEl.appendChild(button);
+		toastEl.onmouseenter = function () {
+			toastHover = true;
+			pauseToast();
+		};
+		toastEl.onmouseleave = function () {
+			toastHover = false;
+			resumeToast();
+		};
+		toastEl.onfocusin = function () {
+			toastFocus = true;
+			pauseToast();
+		};
+		toastEl.onfocusout = function () {
+			toastFocus = false;
+			resumeToast();
+		};
+		armToast(15000);
 	}
 
 	function restRoot() {
@@ -1779,12 +1860,15 @@
 		return '';
 	}
 
-	function sendBatch(items, index, savedCount, failureText, logFailed) {
+	function sendBatch(items, index, savedCount, failureText, logFailed, batchIds) {
+		var ids = batchIds || [];
 		if (index >= items.length) {
 			saving = false;
 			updateSaveBar();
 			if (savedCount > 0 && logFailed) {
 				showToast(t('logFailed', 'Saved, but the change could not be logged, so it cannot be undone.'));
+			} else if (savedCount > 0 && ids.length) {
+				showUndoToast(savedCount, ids);
 			} else if (savedCount > 0) {
 				showToast(t('savedItems', 'Saved %s items.').replace('%s', String(savedCount)));
 			} else {
@@ -1810,7 +1894,11 @@
 				nextFailure = nextFailure || firstFailureMessage(result.body);
 			}
 			var nextLogFailed = !!logFailed || !!(result.body && result.body.log_failed);
-			sendBatch(items, index + 50, savedCount + added, nextFailure, nextLogFailed);
+			var nextIds = ids.slice();
+			if (result.body && result.body.batch_id && added > 0) {
+				nextIds.push(String(result.body.batch_id));
+			}
+			sendBatch(items, index + 50, savedCount + added, nextFailure, nextLogFailed, nextIds);
 		}).catch(function () {
 			saving = false;
 			updateSaveBar();
@@ -1911,6 +1999,20 @@
 			row.reformat();
 		}
 		paintRow(row);
+	}
+
+	function reapplyDirty() {
+		if (!table || dirty.size === 0) {
+			return;
+		}
+		dirty.forEach(function (entry, id) {
+			var row = findRow(id);
+			if (!row) {
+				return;
+			}
+			applyServerRow(id, row.getData());
+		});
+		updateSaveBar();
 	}
 
 	function clearFieldMessages(id) {
@@ -2873,7 +2975,14 @@
 		var row = document.createElement('tr');
 		appendCell(row, formatWhen(batch.created_at));
 		appendCell(row, batch.user_name || t('unknownUser', 'Unknown user'));
-		appendCell(row, sourceLabel(batch.source));
+		var sourceCell = document.createElement('td');
+		sourceCell.textContent = sourceLabel(batch.source);
+		if (batch.undo_state === 'full') {
+			sourceCell.appendChild(undoBadge(t('logUndone', 'Undone')));
+		} else if (batch.undo_state === 'partial') {
+			sourceCell.appendChild(undoBadge(t('partlyUndone', 'Partly undone')));
+		}
+		row.appendChild(sourceCell);
 		appendCell(row, String(batch.item_count));
 		appendCell(row, String(batch.change_count));
 		appendCell(row, batch.summary || '');
@@ -2897,13 +3006,324 @@
 				loadBatch(batch.batch_id, detailCell);
 			}
 		});
+		action.className = 'low-pte-log-actions';
 		action.appendChild(button);
-		// Phase 6 inserts the Undo batch button in this cell. Do not render it in this phase.
+		if (batch.can_undo) {
+			var undo = document.createElement('button');
+			undo.type = 'button';
+			undo.className = 'button';
+			undo.textContent = t('undoBatch', 'Undo batch');
+			undo.addEventListener('click', function () {
+				var remaining = Math.max(0, Number(batch.change_count) - Number(batch.undone_count || 0));
+				requestUndo(batch.batch_id, remaining, Number(batch.item_count) || 0, undo);
+			});
+			action.appendChild(undo);
+		}
 		row.appendChild(action);
 		var fragment = document.createDocumentFragment();
 		fragment.appendChild(row);
 		fragment.appendChild(detail);
+		if (historyFocusBatch && historyFocusBatch === batch.batch_id) {
+			historyFocusBatch = '';
+			detail.hidden = false;
+			button.setAttribute('aria-expanded', 'true');
+			button.textContent = t('collapseBatch', 'Hide changes');
+			loadBatch(batch.batch_id, detailCell);
+		}
 		return fragment;
+	}
+
+	function undoBadge(label) {
+		var badge = document.createElement('span');
+		badge.className = 'low-pte-undo-badge';
+		badge.textContent = label;
+		return badge;
+	}
+
+	function requestUndo(batchId, changes, items, returnTo) {
+		closeModal(false);
+		modalReturn = returnTo || document.activeElement;
+		modalEl = document.createElement('div');
+		modalEl.className = 'low-pte-modal';
+		modalEl.setAttribute('role', 'dialog');
+		modalEl.setAttribute('aria-modal', 'true');
+		var card = document.createElement('div');
+		card.className = 'low-pte-modal-card';
+		var heading = document.createElement('h2');
+		heading.className = 'low-pte-modal-title';
+		heading.id = 'low-pte-undo-title';
+		heading.textContent = t('undoConfirmTitle', 'Undo this batch?');
+		modalEl.setAttribute('aria-labelledby', 'low-pte-undo-title');
+		var body = document.createElement('p');
+		body.textContent = t('undoConfirmBody', 'This restores %1$s changes across %2$s items. Anything changed since will be left alone and reported.')
+			.replace('%1$s', String(changes))
+			.replace('%2$s', String(items));
+		var actions = document.createElement('div');
+		actions.className = 'low-pte-modal-actions';
+		var confirm = document.createElement('button');
+		confirm.type = 'button';
+		confirm.className = 'button button-primary';
+		confirm.textContent = t('undoBatch', 'Undo batch');
+		var cancel = document.createElement('button');
+		cancel.type = 'button';
+		cancel.className = 'button';
+		cancel.textContent = t('cancel', 'Cancel');
+		function dismiss() {
+			var back = modalReturn;
+			closeModal(false);
+			if (back && typeof back.focus === 'function') {
+				back.focus();
+			}
+		}
+		cancel.addEventListener('click', dismiss);
+		confirm.addEventListener('click', function () {
+			confirm.disabled = true;
+			cancel.disabled = true;
+			runUndo([batchId], { modal: true, returnTo: modalReturn });
+		});
+		actions.appendChild(confirm);
+		actions.appendChild(cancel);
+		card.appendChild(heading);
+		card.appendChild(body);
+		card.appendChild(actions);
+		modalEl.appendChild(card);
+		modalEl.addEventListener('keydown', function (event) {
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				dismiss();
+			}
+		});
+		document.body.appendChild(modalEl);
+		confirm.focus();
+	}
+
+	function runUndo(batchIds, options) {
+		var settings = options || {};
+		var aggregate = {
+			restored: 0,
+			skipped: [],
+			failed: [],
+			restored_ids: [],
+			undo_batch_id: '',
+			log_failed: false,
+			message: ''
+		};
+		var chain = Promise.resolve();
+		batchIds.forEach(function (batchId) {
+			chain = chain.then(function () {
+				if (aggregate.message) {
+					return null;
+				}
+				return postUndo(batchId).then(function (result) {
+					if (!result.response.ok) {
+						aggregate.message = result.body && result.body.message ? String(result.body.message) : t('undoFailed', 'The undo could not be completed.');
+						return null;
+					}
+					var body = result.body || {};
+					aggregate.restored += Number(body.restored) || 0;
+					aggregate.skipped = aggregate.skipped.concat(Array.isArray(body.skipped) ? body.skipped : []);
+					aggregate.failed = aggregate.failed.concat(Array.isArray(body.failed) ? body.failed : []);
+					aggregate.restored_ids = aggregate.restored_ids.concat(Array.isArray(body.restored_ids) ? body.restored_ids : []);
+					aggregate.log_failed = aggregate.log_failed || !!body.log_failed;
+					if (body.undo_batch_id) {
+						aggregate.undo_batch_id = String(body.undo_batch_id);
+					}
+					return null;
+				});
+			});
+		});
+		return chain.then(function () {
+			return finishUndo(aggregate, settings);
+		}).catch(function () {
+			showToast(t('undoFailed', 'The undo could not be completed.'));
+		});
+	}
+
+	function postUndo(batchId) {
+		return window.fetch(restRoot() + 'undo/' + encodeURIComponent(batchId), {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: {
+				'X-WP-Nonce': config.nonce || '',
+				Accept: 'application/json'
+			}
+		}).then(function (response) {
+			return response.json().then(function (body) {
+				return { response: response, body: body };
+			}).catch(function () {
+				return { response: response, body: {} };
+			});
+		});
+	}
+
+	function finishUndo(result, settings) {
+		var dropped = dropRestoredEdits(result.restored_ids);
+		var parts = [];
+		if (result.message) {
+			parts.push(result.message);
+		} else {
+			parts.push(t('restoredChanges', 'Restored %s changes.').replace('%s', String(result.restored)));
+			if (result.skipped.length) {
+				parts.push(t('undoSkippedSince', '%s could not be restored because they changed since. See History.').replace('%s', String(result.skipped.length)));
+			}
+		}
+		if (result.log_failed) {
+			parts.push(t('logFailed', 'Saved, but the change could not be logged, so it cannot be undone.'));
+		}
+		if (dropped) {
+			parts.push(t('undoDirtyDropped', 'Affected rows reloaded. Unsaved edits on those rows were dropped.'));
+		}
+		if (settings.modal) {
+			closeModal(false);
+		}
+		if (settings.toast) {
+			showToast(parts.join(' '), 10000);
+		}
+		if (settings.modal && !result.message) {
+			openUndoResult(result, parts, settings.returnTo);
+		} else if (settings.modal && result.message) {
+			showToast(parts.join(' '));
+		}
+		load();
+		if (state.tab === 'history') {
+			loadHistory();
+		}
+	}
+
+	function dropRestoredEdits(ids) {
+		var dropped = false;
+		(ids || []).forEach(function (id) {
+			var key = Number(id);
+			if (dirty.has(key) || dirty.has(id)) {
+				dirty.delete(key);
+				dirty.delete(id);
+				dropped = true;
+			}
+		});
+		if (dropped) {
+			updateSaveBar();
+		}
+		return dropped;
+	}
+
+	function openUndoResult(result, parts, returnTo) {
+		closeModal(false);
+		modalReturn = returnTo || null;
+		modalEl = document.createElement('div');
+		modalEl.className = 'low-pte-modal';
+		modalEl.setAttribute('role', 'dialog');
+		modalEl.setAttribute('aria-modal', 'true');
+		var card = document.createElement('div');
+		card.className = 'low-pte-modal-card';
+		var heading = document.createElement('h2');
+		heading.className = 'low-pte-modal-title';
+		heading.id = 'low-pte-undo-result-title';
+		heading.textContent = t('undoResultTitle', 'Undo result');
+		modalEl.setAttribute('aria-labelledby', 'low-pte-undo-result-title');
+		card.appendChild(heading);
+		parts.forEach(function (line) {
+			var paragraph = document.createElement('p');
+			paragraph.textContent = line;
+			card.appendChild(paragraph);
+		});
+		var problems = result.skipped.map(function (row) {
+			return {
+				name: row.name || String(row.product_id || ''),
+				field: fieldLabel(row.field),
+				reason: undoReason(row.reason)
+			};
+		}).concat(result.failed.map(function (row) {
+			return {
+				name: row.name || String(row.product_id || ''),
+				field: fieldLabel(row.field),
+				reason: row.message || t('undoFailed', 'The undo could not be completed.')
+			};
+		}));
+		if (problems.length) {
+			var tableWrap = document.createElement('div');
+			tableWrap.className = 'low-pte-bulk-table-wrap';
+			var problemTable = document.createElement('table');
+			problemTable.className = 'low-pte-undo-table';
+			var head = document.createElement('tr');
+			[t('undoProduct', 'Product'), t('undoField', 'Field'), t('undoReason', 'Reason')].forEach(function (label) {
+				var cell = document.createElement('th');
+				cell.scope = 'col';
+				cell.textContent = label;
+				head.appendChild(cell);
+			});
+			problemTable.appendChild(head);
+			problems.forEach(function (row) {
+				var line = document.createElement('tr');
+				[row.name, row.field, row.reason].forEach(function (value) {
+					var cell = document.createElement('td');
+					cell.textContent = value;
+					line.appendChild(cell);
+				});
+				problemTable.appendChild(line);
+			});
+			tableWrap.appendChild(problemTable);
+			card.appendChild(tableWrap);
+		}
+		var actions = document.createElement('div');
+		actions.className = 'low-pte-modal-actions';
+		if (result.undo_batch_id) {
+			var view = document.createElement('button');
+			view.type = 'button';
+			view.className = 'button';
+			view.textContent = t('undoViewHistory', 'View this undo in History');
+			view.addEventListener('click', function () {
+				showUndoInHistory(result.undo_batch_id);
+			});
+			actions.appendChild(view);
+		}
+		var close = document.createElement('button');
+		close.type = 'button';
+		close.className = 'button button-primary';
+		close.textContent = t('close', 'Close');
+		close.addEventListener('click', function () {
+			var back = modalReturn;
+			closeModal(false);
+			if (back && typeof back.focus === 'function') {
+				back.focus();
+			}
+		});
+		actions.appendChild(close);
+		card.appendChild(actions);
+		modalEl.appendChild(card);
+		modalEl.addEventListener('keydown', function (event) {
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				close.click();
+			}
+		});
+		document.body.appendChild(modalEl);
+		close.focus();
+	}
+
+	function undoReason(reason) {
+		if (reason === 'changed_since') {
+			return t('reasonChangedSince', 'Changed since this edit, left as is');
+		}
+		if (reason === 'missing') {
+			return t('reasonMissing', 'Item no longer exists');
+		}
+		if (reason === 'forbidden') {
+			return t('reasonForbidden', 'You cannot edit this item');
+		}
+		return reason ? String(reason) : '';
+	}
+
+	function showUndoInHistory(batchId) {
+		closeModal(false);
+		historyFocusBatch = batchId;
+		state.tab = 'history';
+		state.log_page = 1;
+		state.log_user = '';
+		state.log_search = '';
+		applyTab();
+		syncHistoryControls();
+		writeUrl('push');
+		loadHistory();
 	}
 
 	function loadBatch(batchId, cell) {
@@ -3113,6 +3533,7 @@
 		reload: function () {
 			load();
 		},
-		toast: showToast
+		toast: showToast,
+		requestUndo: requestUndo
 	};
 }());

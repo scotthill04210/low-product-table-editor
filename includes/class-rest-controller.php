@@ -146,6 +146,62 @@ class Rest_Controller {
 				'permission_callback' => array( $this, 'permissions_check' ),
 			)
 		);
+
+		register_rest_route(
+			'low-pte/v1',
+			'/undo/(?P<batch_id>[0-9a-fA-F-]{36})',
+			array(
+				'methods'             => 'POST',
+				'callback'            => array( $this, 'undo_batch' ),
+				'permission_callback' => array( $this, 'permissions_check' ),
+				'args'                => array(
+					'batch_id' => array(
+						'description'       => __( 'Batch to undo.', 'low-product-table-editor' ),
+						'type'              => 'string',
+						'required'          => true,
+						'validate_callback' => array( $this, 'validate_batch_id' ),
+					),
+				),
+			)
+		);
+	}
+
+	/**
+	 * Accept a version 4 UUID.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param mixed $value Candidate batch id.
+	 * @return bool
+	 */
+	public function validate_batch_id( mixed $value ): bool {
+		if ( ! is_string( $value ) ) {
+			return false;
+		}
+
+		return 1 === preg_match(
+			'/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+			strtolower( $value )
+		);
+	}
+
+	/**
+	 * Undo one batch. Anything changed since the edit is left alone.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function undo_batch( \WP_REST_Request $request ): \WP_REST_Response|\WP_Error {
+		$batch_id = strtolower( (string) $request->get_param( 'batch_id' ) );
+		$result   = $this->products->undo_batch( $batch_id );
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return rest_ensure_response( $result );
 	}
 
 	/**

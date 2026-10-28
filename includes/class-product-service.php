@@ -48,13 +48,14 @@ class Product_Service {
 	 * @return array<string, mixed>
 	 */
 	public function get_products( array $args ): array {
-		$page     = max( 1, absint( $args['page'] ?? 1 ) );
-		$per_page = $this->per_page( $args['per_page'] ?? 25 );
-		$search   = $this->search_term( $args['search'] ?? '' );
-		$category = sanitize_title( is_scalar( $args['category'] ?? '' ) ? (string) $args['category'] : '' );
-		$type     = $this->choice( $args['type'] ?? '', array( 'simple', 'variable' ) );
-		$stock    = $this->choice( $args['stock_status'] ?? '', array( 'instock', 'outofstock', 'onbackorder' ) );
-		$status   = $this->choice( $args['status'] ?? '', array( 'publish', 'draft', 'private', 'pending' ) );
+		$page         = max( 1, absint( $args['page'] ?? 1 ) );
+		$per_page     = $this->per_page( $args['per_page'] ?? 25 );
+		$search       = $this->search_term( $args['search'] ?? '' );
+		$category_raw = $args['category'] ?? '';
+		$category     = sanitize_title( is_scalar( $category_raw ) ? (string) $category_raw : '' );
+		$type         = $this->choice( $args['type'] ?? '', array( 'simple', 'variable' ) );
+		$stock        = $this->choice( $args['stock_status'] ?? '', array( 'instock', 'outofstock', 'onbackorder' ) );
+		$status       = $this->choice( $args['status'] ?? '', array( 'publish', 'draft', 'private', 'pending' ) );
 
 		$query = array(
 			'status'   => '' !== $status ? array( $status ) : array( 'publish', 'draft', 'private', 'pending' ),
@@ -2006,6 +2007,53 @@ class Product_Service {
 	}
 
 	/**
+	 * Write a logged price back with the same decimal places it was stored with.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @param string      $which   regular or sale.
+	 * @param string      $value   Logged price, or an empty string to clear a sale price.
+	 * @return void
+	 */
+	private function restore_price( \WC_Product $product, string $which, string $value ): void {
+		if ( '' === $value ) {
+			$this->set_price( $product, $which, '' );
+			return;
+		}
+
+		$scale  = $this->decimal_scale( $value );
+		$filter = static function () use ( $scale ): int {
+			return $scale;
+		};
+
+		add_filter( 'woocommerce_price_num_decimals', $filter, 9999 );
+		if ( 'sale' === $which ) {
+			$product->set_sale_price( $value );
+		} else {
+			$product->set_regular_price( $value );
+		}
+		remove_filter( 'woocommerce_price_num_decimals', $filter, 9999 );
+	}
+
+	/**
+	 * Decimal places in a stored price string.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string $value Price string.
+	 * @return int
+	 */
+	private function decimal_scale( string $value ): int {
+		$parts = explode( '.', trim( $value ) );
+		if ( count( $parts ) < 2 ) {
+			return 0;
+		}
+
+		return strlen( $parts[1] );
+	}
+
+	/**
 	 * Parent product IDs matching the grid filters, with no paging.
 	 *
 	 * @since 0.1.1
@@ -2014,11 +2062,12 @@ class Product_Service {
 	 * @return array<int, int>
 	 */
 	public function parent_ids_for_filters( array $filters ): array {
-		$search   = $this->search_term( $filters['search'] ?? '' );
-		$category = sanitize_title( is_scalar( $filters['category'] ?? '' ) ? (string) $filters['category'] : '' );
-		$type     = $this->choice( $filters['type'] ?? '', array( 'simple', 'variable' ) );
-		$stock    = $this->choice( $filters['stock_status'] ?? '', array( 'instock', 'outofstock', 'onbackorder' ) );
-		$status   = $this->choice( $filters['status'] ?? '', array( 'publish', 'draft', 'private', 'pending' ) );
+		$search       = $this->search_term( $filters['search'] ?? '' );
+		$category_raw = $filters['category'] ?? '';
+		$category     = sanitize_title( is_scalar( $category_raw ) ? (string) $category_raw : '' );
+		$type         = $this->choice( $filters['type'] ?? '', array( 'simple', 'variable' ) );
+		$stock        = $this->choice( $filters['stock_status'] ?? '', array( 'instock', 'outofstock', 'onbackorder' ) );
+		$status       = $this->choice( $filters['status'] ?? '', array( 'publish', 'draft', 'private', 'pending' ) );
 
 		$query = array(
 			'status'  => '' !== $status ? array( $status ) : array( 'publish', 'draft', 'private', 'pending' ),
@@ -2284,5 +2333,433 @@ class Product_Service {
 			array( '%d' )
 		);
 		clean_post_cache( $post_id );
+	}
+
+	/**
+	 * Restore one batch without overwriting anything that changed after it.
+	 *
+	 * Each product is loaded, changed, and saved once. Price fields are set
+	 * together before that save. Parents are synced once after every save.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string $batch_id Batch to undo.
+	 * @return array<string, mixed>|\WP_Error
+	 */
+	public function undo_batch( string $batch_id ): array|\WP_Error {
+		$repository = new Log_Repository();
+		$rows       = $repository->raw_batch( $batch_id );
+
+		if ( array() === $rows ) {
+			return new \WP_Error(
+				'low_pte_batch_missing',
+				__( 'That batch was not found.', 'low-product-table-editor' ),
+				array( 'status' => 404 )
+			);
+		}
+
+		if ( 'undo' === (string) $rows[0]['source'] ) {
+			return new \WP_Error(
+				'low_pte_undo_source',
+				__( 'An undo batch cannot be undone.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$pending = array();
+		foreach ( $rows as $row ) {
+			if ( null === $row['undone_at'] ) {
+				$pending[] = $row;
+			}
+		}
+
+		if ( array() === $pending ) {
+			return new \WP_Error(
+				'low_pte_already_undone',
+				__( 'This batch is already undone.', 'low-product-table-editor' ),
+				array( 'status' => 409 )
+			);
+		}
+
+		$grouped = array();
+		foreach ( $pending as $row ) {
+			$grouped[ (int) $row['product_id'] ][] = $row;
+		}
+
+		$this->prime_bulk_caches( array_keys( $grouped ) );
+
+		$skipped     = array();
+		$failed      = array();
+		$restored    = array();
+		$log_entries = array();
+		$parents     = array();
+
+		foreach ( $grouped as $product_id => $entries ) {
+			$this->undo_product(
+				(int) $product_id,
+				$entries,
+				$skipped,
+				$failed,
+				$restored,
+				$log_entries,
+				$parents
+			);
+		}
+
+		$this->sync_undone_parents( array_keys( $parents ) );
+
+		$undo_batch_id = '';
+		$log_failed    = false;
+		if ( array() !== $log_entries ) {
+			$undo_batch_id = $repository->new_batch_id();
+			$log_failed    = ! $this->log_changes( $undo_batch_id, 'undo', $log_entries );
+		}
+
+		$entry_ids = array();
+		foreach ( $restored as $entry ) {
+			$entry_ids[] = (int) $entry['id'];
+		}
+		$repository->mark_undone( $entry_ids );
+
+		$product_ids = array();
+		foreach ( $restored as $entry ) {
+			$product_ids[ (int) $entry['product_id'] ] = true;
+		}
+
+		return array(
+			'undo_batch_id' => $undo_batch_id,
+			'restored'      => count( $restored ),
+			'restored_ids'  => array_map( 'intval', array_keys( $product_ids ) ),
+			'skipped'       => $skipped,
+			'failed'        => $failed,
+			'log_failed'    => $log_failed,
+		);
+	}
+
+	/**
+	 * Restore every still-current field on one product, then save once.
+	 *
+	 * @param int                             $product_id  Product or variation ID.
+	 * @param array<int, array<string,mixed>> $entries     Pending log rows.
+	 * @param array<int, array<string,mixed>> $skipped     Skipped rows, appended.
+	 * @param array<int, array<string,mixed>> $failed      Failed rows, appended.
+	 * @param array<int, array<string,mixed>> $restored    Restored log rows, appended.
+	 * @param array<int, array<string,mixed>> $log_entries Undo log rows, appended.
+	 * @param array<int, bool>                $parents     Parent IDs that need a sync.
+	 * @return void
+	 */
+	private function undo_product( int $product_id, array $entries, array &$skipped, array &$failed, array &$restored, array &$log_entries, array &$parents ): void {
+		$product = wc_get_product( $product_id );
+		$status  = get_post_status( $product_id );
+
+		if ( ! $product instanceof \WC_Product || 'trash' === $status ) {
+			$title = get_the_title( $product_id );
+			$name  = is_string( $title ) ? $title : '';
+			foreach ( $entries as $entry ) {
+				$skipped[] = $this->undo_skip( $entry, $name, 'missing', null, null );
+			}
+			return;
+		}
+
+		if ( ! current_user_can( 'edit_post', $product_id ) ) {
+			foreach ( $entries as $entry ) {
+				$skipped[] = $this->undo_skip( $entry, $product->get_name(), 'forbidden', null, null );
+			}
+			return;
+		}
+
+		$name       = $product->get_name();
+		$applicable = array();
+
+		foreach ( $entries as $entry ) {
+			$field = (string) $entry['field'];
+			if ( ! $this->undo_field_allowed( $field ) ) {
+				$failed[] = $this->undo_failure( $product_id, $name, $field, __( 'That field cannot be restored.', 'low-product-table-editor' ) );
+				continue;
+			}
+
+			$current    = $this->current_field( $product, $field );
+			$logged_new = $entry['new_value'];
+			$logged_new = is_string( $logged_new ) || null === $logged_new ? $logged_new : null;
+			$expected   = $this->value_from_log( $field, $logged_new );
+			if ( ! $this->field_matches( $field, $current, $expected ) ) {
+				$skipped[] = $this->undo_skip(
+					$entry,
+					$name,
+					'changed_since',
+					$logged_new,
+					$this->log_value( $field, $current )
+				);
+				continue;
+			}
+
+			$applicable[] = $entry;
+		}
+
+		if ( array() === $applicable ) {
+			return;
+		}
+
+		usort(
+			$applicable,
+			function ( array $left, array $right ): int {
+				return $this->undo_rank( (string) $left['field'] ) <=> $this->undo_rank( (string) $right['field'] );
+			}
+		);
+
+		$before  = array();
+		$targets = array();
+		$wrote   = false;
+
+		try {
+			foreach ( $applicable as $entry ) {
+				$field             = (string) $entry['field'];
+				$before[ $field ]  = $this->log_value( $field, $this->current_field( $product, $field ) );
+				$logged_old        = $entry['old_value'];
+				$target            = $this->value_from_log( $field, is_string( $logged_old ) || null === $logged_old ? $logged_old : null );
+				$targets[ $field ] = $target;
+
+				if ( 'stock_status' === $field && $this->stock_is_managed( $product ) ) {
+					continue;
+				}
+
+				$wrote = true;
+
+				if ( 'regular_price' === $field || 'sale_price' === $field ) {
+					$this->restore_price( $product, 'regular_price' === $field ? 'regular' : 'sale', (string) $target );
+					continue;
+				}
+
+				if ( 'stock_quantity' === $field && null === $target ) {
+					$product->set_stock_quantity( null );
+					continue;
+				}
+
+				$this->set_field( $product, $field, $target );
+			}
+
+			if ( $wrote ) {
+				$this->save_product( $product );
+			}
+		} catch ( \WC_Data_Exception $exception ) {
+			foreach ( $applicable as $entry ) {
+				$failed[] = $this->undo_failure( $product_id, $name, (string) $entry['field'], $exception->getMessage() );
+			}
+			return;
+		} catch ( \Throwable $exception ) {
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Logged only while WP_DEBUG is on.
+				error_log( 'LOW Product Table Editor: ' . $exception->getMessage() );
+			}
+
+			$message = __( 'The changes could not be restored.', 'low-product-table-editor' );
+			foreach ( $applicable as $entry ) {
+				$failed[] = $this->undo_failure( $product_id, $name, (string) $entry['field'], $message );
+			}
+			return;
+		}
+
+		$fresh  = $this->reload_product( $product_id );
+		$source = $fresh instanceof \WC_Product ? $fresh : $product;
+		$any    = false;
+
+		foreach ( $applicable as $entry ) {
+			$field  = (string) $entry['field'];
+			$target = $targets[ $field ];
+			$after  = $this->current_field( $source, $field );
+
+			if ( ! $this->field_matches( $field, $after, $target ) ) {
+				$reason = __( 'The value could not be restored.', 'low-product-table-editor' );
+				if ( 'stock_status' === $field && $this->stock_is_managed( $source ) ) {
+					$reason = __( 'Stock status follows the managed quantity, so it was left as is.', 'low-product-table-editor' );
+				}
+				$failed[] = $this->undo_failure( $product_id, $name, $field, $reason );
+				continue;
+			}
+
+			$any           = true;
+			$restored[]    = $entry;
+			$parent_id     = (int) $entry['parent_id'];
+			$log_entries[] = array(
+				'product_id' => $product_id,
+				'parent_id'  => $parent_id,
+				'field'      => $field,
+				'old'        => $before[ $field ] ?? null,
+				'new'        => $this->log_value( $field, $after ),
+			);
+		}
+
+		if ( $any && $source->is_type( 'variation' ) ) {
+			$parent_id = $source->get_parent_id();
+			if ( $parent_id > 0 ) {
+				$parents[ $parent_id ] = true;
+			}
+		}
+	}
+
+	/**
+	 * Sync each affected variable parent once, then put menu_order back.
+	 *
+	 * @param array<int, int> $parent_ids Parent product IDs.
+	 * @return void
+	 */
+	private function sync_undone_parents( array $parent_ids ): void {
+		$parent_ids = array_values( array_filter( array_map( 'absint', $parent_ids ) ) );
+		if ( array() === $parent_ids ) {
+			return;
+		}
+
+		$orders = $this->menu_orders_for_parents( $parent_ids );
+		foreach ( $parent_ids as $parent_id ) {
+			if ( ! class_exists( '\WC_Product_Variable' ) ) {
+				continue;
+			}
+			\WC_Product_Variable::sync( $parent_id );
+			if ( function_exists( 'wc_delete_product_transients' ) ) {
+				wc_delete_product_transients( $parent_id );
+			}
+		}
+		$this->restore_menu_orders( $orders );
+	}
+
+	/**
+	 * Whether this product manages its own stock, or inherits a parent that does.
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @return bool
+	 */
+	private function stock_is_managed( \WC_Product $product ): bool {
+		$value = $product->get_manage_stock( 'edit' );
+		if ( true === $value || 'yes' === $value ) {
+			return true;
+		}
+
+		if ( 'parent' === $value ) {
+			return $this->parent_manages_stock( $product );
+		}
+
+		return false;
+	}
+
+	/**
+	 * Turn a logged string back into the value setters expect.
+	 *
+	 * @param string      $field  Field name.
+	 * @param string|null $stored Logged value, or null when the log stored SQL NULL.
+	 * @return mixed
+	 */
+	private function value_from_log( string $field, ?string $stored ): mixed {
+		if ( 'manage_stock' === $field ) {
+			if ( 'parent' === $stored ) {
+				return 'parent';
+			}
+
+			return 'yes' === $stored;
+		}
+
+		if ( 'stock_quantity' === $field ) {
+			if ( null === $stored || '' === $stored ) {
+				return null;
+			}
+
+			return (int) $stored;
+		}
+
+		if ( null === $stored ) {
+			return '';
+		}
+
+		return $stored;
+	}
+
+	/**
+	 * Field order for a restore. Stock status is last, and only when stock is not managed.
+	 *
+	 * @param string $field Field name.
+	 * @return int
+	 */
+	private function undo_rank( string $field ): int {
+		$order = array(
+			'manage_stock'       => 0,
+			'stock_quantity'     => 1,
+			'regular_price'      => 2,
+			'sale_price'         => 3,
+			'sku'                => 4,
+			'weight'             => 5,
+			'name'               => 6,
+			'status'             => 7,
+			'catalog_visibility' => 8,
+			'description'        => 9,
+			'short_description'  => 10,
+			'stock_status'       => 11,
+		);
+
+		return $order[ $field ] ?? 50;
+	}
+
+	/**
+	 * Whether undo knows how to restore this field.
+	 *
+	 * @param string $field Field name.
+	 * @return bool
+	 */
+	private function undo_field_allowed( string $field ): bool {
+		return in_array(
+			$field,
+			array(
+				'regular_price',
+				'sale_price',
+				'sku',
+				'weight',
+				'manage_stock',
+				'stock_quantity',
+				'stock_status',
+				'name',
+				'status',
+				'catalog_visibility',
+				'description',
+				'short_description',
+			),
+			true
+		);
+	}
+
+	/**
+	 * One skipped undo row.
+	 *
+	 * @param array<string, mixed> $entry    Log row.
+	 * @param string               $name     Product name.
+	 * @param string               $reason   changed_since, missing, or forbidden.
+	 * @param string|null          $expected Value the log expected to still be current.
+	 * @param string|null          $current  Value stored now.
+	 * @return array<string, mixed>
+	 */
+	private function undo_skip( array $entry, string $name, string $reason, ?string $expected, ?string $current ): array {
+		return array(
+			'product_id' => (int) $entry['product_id'],
+			'name'       => $name,
+			'field'      => (string) $entry['field'],
+			'reason'     => $reason,
+			'expected'   => $expected,
+			'current'    => $current,
+		);
+	}
+
+	/**
+	 * One failed undo row.
+	 *
+	 * @param int    $product_id Product or variation ID.
+	 * @param string $name       Product name.
+	 * @param string $field      Field name.
+	 * @param string $message    Plain message, never a stack trace.
+	 * @return array<string, mixed>
+	 */
+	private function undo_failure( int $product_id, string $name, string $field, string $message ): array {
+		return array(
+			'product_id' => $product_id,
+			'name'       => $name,
+			'field'      => $field,
+			'message'    => $message,
+		);
 	}
 }

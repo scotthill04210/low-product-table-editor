@@ -179,17 +179,27 @@ class Log_Repository {
 			$batch_id = (string) $batch['batch_id'];
 			$user_id  = (int) $batch['user_id'];
 			$changes  = (int) $batch['change_count'];
-			$rows[]   = array(
+			$undone   = (int) $batch['undone_count'];
+			$source   = (string) $batch['source'];
+			$state    = 'none';
+			if ( $changes > 0 && $undone >= $changes ) {
+				$state = 'full';
+			} elseif ( $undone > 0 ) {
+				$state = 'partial';
+			}
+			$rows[] = array(
 				'batch_id'     => $batch_id,
 				'user_id'      => $user_id,
 				'user_name'    => $names[ $user_id ] ?? '',
-				'source'       => (string) $batch['source'],
+				'source'       => $source,
 				'created_at'   => (string) $batch['created_at'],
 				'item_count'   => (int) $batch['item_count'],
 				'change_count' => $changes,
 				'summary'      => $summaries[ $batch_id ] ?? '',
-				'undone_count' => (int) $batch['undone_count'],
+				'undone_count' => $undone,
 				'total_count'  => $changes,
+				'can_undo'     => 'undo' !== $source && $undone < $changes,
+				'undo_state'   => $state,
 			);
 		}
 
@@ -618,5 +628,80 @@ class Log_Repository {
 		}
 
 		return $values;
+	}
+
+	/**
+	 * Raw rows for one batch, including source and values that are still undone.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string $batch_id Batch identifier.
+	 * @return array<int, array<string, mixed>>
+	 */
+	public function raw_batch( string $batch_id ): array {
+		global $wpdb;
+
+		$table = $this->table();
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Table name is the current site prefix.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, product_id, parent_id, field, old_value, new_value, source, undone_at FROM {$table} WHERE batch_id = %s ORDER BY id ASC",
+				$batch_id
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		if ( ! is_array( $rows ) ) {
+			return array();
+		}
+
+		$entries = array();
+		foreach ( $rows as $row ) {
+			$undone_at = $row['undone_at'];
+			$entries[] = array(
+				'id'         => (int) $row['id'],
+				'product_id' => (int) $row['product_id'],
+				'parent_id'  => (int) $row['parent_id'],
+				'field'      => (string) $row['field'],
+				'old_value'  => $row['old_value'],
+				'new_value'  => $row['new_value'],
+				'source'     => (string) $row['source'],
+				'undone_at'  => null === $undone_at || '' === $undone_at ? null : (string) $undone_at,
+			);
+		}
+
+		return $entries;
+	}
+
+	/**
+	 * Mark restored log rows undone, 500 ids at a time.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param array<int, int> $ids Log row IDs.
+	 * @return void
+	 */
+	public function mark_undone( array $ids ): void {
+		global $wpdb;
+
+		$ids = array_values( array_filter( array_map( 'absint', $ids ) ) );
+		if ( array() === $ids ) {
+			return;
+		}
+
+		$when  = current_time( 'mysql', true );
+		$table = $this->table();
+
+		foreach ( array_chunk( $ids, 500 ) as $chunk ) {
+			$placeholders = implode( ', ', array_fill( 0, count( $chunk ), '%d' ) );
+			$args         = array_merge( array( $when ), $chunk );
+			$sql          = "UPDATE {$table} SET undone_at = %s WHERE undone_at IS NULL AND id IN ( {$placeholders} )";
+
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Placeholders match the chunk. Table name is the current site prefix.
+			$wpdb->query( $wpdb->prepare( $sql, $args ) );
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		}
 	}
 }
