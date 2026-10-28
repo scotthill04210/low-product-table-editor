@@ -69,6 +69,9 @@ class Plugin {
 
 		$admin_page = new Admin_Page();
 		$admin_page->register();
+
+		$rest = new Rest_Controller( new Product_Service() );
+		$rest->register();
 	}
 
 	/**

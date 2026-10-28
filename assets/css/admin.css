@@ -72,3 +72,167 @@
 .low-pte-noscript {
 	margin-top: 12px;
 }
+
+.low-pte-toolbar {
+	align-items: flex-end;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px 16px;
+	margin-bottom: 16px;
+}
+
+.low-pte-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 0;
+}
+
+.low-pte-field-label {
+	color: #1d2327;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.low-pte-field input,
+.low-pte-field select {
+	max-width: 100%;
+	min-width: 140px;
+}
+
+.low-pte-search {
+	min-width: 220px;
+}
+
+.low-pte-toolbar-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.low-pte-filter-count {
+	background: #2271b1;
+	border-radius: 10px;
+	color: #fff;
+	display: inline-block;
+	font-size: 11px;
+	line-height: 1.6;
+	margin-left: 6px;
+	min-width: 1.4em;
+	padding: 0 6px;
+	text-align: center;
+}
+
+.low-pte-clear:disabled .low-pte-filter-count {
+	display: none;
+}
+
+.low-pte-message {
+	margin: 0 0 12px;
+}
+
+.low-pte-message-text {
+	margin: 0 0 8px;
+}
+
+.low-pte-message-error {
+	color: #b32d2e;
+}
+
+.low-pte-skeleton {
+	display: grid;
+	gap: 10px;
+}
+
+.low-pte-skeleton-bar {
+	animation: low-pte-shimmer 1.2s linear infinite;
+	background: linear-gradient(90deg, #f0f0f1 25%, #fff 50%, #f0f0f1 75%);
+	background-size: 200% 100%;
+	border-radius: 2px;
+	height: 16px;
+}
+
+.low-pte-skeleton[hidden],
+.low-pte-grid[hidden],
+.low-pte-pager[hidden],
+.low-pte-message[hidden],
+.low-pte-filter-count[hidden] {
+	display: none !important;
+}
+
+@keyframes low-pte-shimmer {
+	0% {
+		background-position: 100% 0;
+	}
+
+	100% {
+		background-position: -100% 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.low-pte-skeleton-bar {
+		animation: none;
+		background: #f0f0f1;
+	}
+}
+
+.low-pte-grid {
+	border: 1px solid #c3c4c7;
+}
+
+.low-pte-product-cell {
+	align-items: center;
+	display: inline-flex;
+	gap: 8px;
+	max-width: 100%;
+	min-width: 0;
+}
+
+.low-pte-product-name {
+	font-weight: 600;
+}
+
+.low-pte-variation-count {
+	background: #dcdcde;
+	border-radius: 999px;
+	color: #1d2327;
+	flex: 0 0 auto;
+	font-size: 11px;
+	font-weight: 400;
+	line-height: 1.5;
+	padding: 0 8px;
+	white-space: nowrap;
+}
+
+.low-pte-ellipsis {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.low-pte-grid .tabulator-row.low-pte-parent-row .tabulator-cell {
+	background-color: #f0f6fc;
+}
+
+.low-pte-grid .tabulator-row.low-pte-variation-row .tabulator-cell {
+	background-color: #fff;
+}
+
+.low-pte-pager {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.low-pte-pager-status {
+	margin-right: 8px;
+}
+
+.low-pte-pager-ellipsis {
+	color: #646970;
+	padding: 0 4px;
+}

@@ -133,15 +133,15 @@ class Admin_Page {
 		wp_enqueue_style(
 			'low-pte-admin',
 			LOW_PTE_URL . 'assets/css/admin.css',
-			array(),
-			LOW_PTE_VERSION
+			array( 'low-pte-tabulator' ),
+			$this->asset_version( 'assets/css/admin.css' )
 		);
 
 		wp_enqueue_script(
 			'low-pte-app',
 			LOW_PTE_URL . 'assets/js/app.js',
 			array( 'low-pte-tabulator' ),
-			LOW_PTE_VERSION,
+			$this->asset_version( 'assets/js/app.js' ),
 			true
 		);
 
@@ -159,6 +159,77 @@ class Admin_Page {
 	}
 
 	/**
+	 * Flattened product categories for the filter select.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function categories(): array {
+		$terms = get_terms(
+			array(
+				'taxonomy'   => 'product_cat',
+				'hide_empty' => false,
+				'orderby'    => 'name',
+				'order'      => 'ASC',
+			)
+		);
+
+		if ( is_wp_error( $terms ) || ! is_array( $terms ) ) {
+			return array();
+		}
+
+		$by_parent = array();
+		foreach ( $terms as $term ) {
+			if ( ! $term instanceof \WP_Term ) {
+				continue;
+			}
+			$by_parent[ (int) $term->parent ][] = $term;
+		}
+
+		foreach ( $by_parent as $parent_id => $group ) {
+			usort(
+				$group,
+				static function ( \WP_Term $left, \WP_Term $right ): int {
+					return strcasecmp( $left->name, $right->name );
+				}
+			);
+			$by_parent[ $parent_id ] = $group;
+		}
+
+		$flat = array();
+		$this->append_category_branch( $by_parent, 0, 0, $flat );
+
+		return $flat;
+	}
+
+	/**
+	 * Append one category branch in parent-then-child order.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @param array<int, array<int, \WP_Term>> $by_parent      Terms grouped by parent ID.
+	 * @param int                              $parent_term_id Parent term ID. Zero is the root.
+	 * @param int                              $depth          Nesting depth.
+	 * @param array<int, array<string, mixed>> $flat           Collected rows.
+	 * @return void
+	 */
+	private function append_category_branch( array $by_parent, int $parent_term_id, int $depth, array &$flat ): void {
+		if ( ! isset( $by_parent[ $parent_term_id ] ) ) {
+			return;
+		}
+
+		foreach ( $by_parent[ $parent_term_id ] as $term ) {
+			$flat[] = array(
+				'slug'  => $term->slug,
+				'name'  => $term->name,
+				'depth' => $depth,
+			);
+			$this->append_category_branch( $by_parent, (int) $term->term_id, $depth + 1, $flat );
+		}
+	}
+
+	/**
 	 * Data passed to the admin app.
 	 *
 	 * @since 0.1.0
@@ -172,17 +243,83 @@ class Admin_Page {
 			'perPageOptions' => array( 10, 25, 50, 100 ),
 			'defaultPerPage' => 25,
 			'version'        => LOW_PTE_VERSION,
+			'categories'     => $this->categories(),
 			'i18n'           => array(
-				'loading'        => __( 'Loading editor...', 'low-product-table-editor' ),
-				'placeholder'    => __( 'Table editor loads here in the next phase', 'low-product-table-editor' ),
-				'title'          => __( 'Table Editor', 'low-product-table-editor' ),
-				'table'          => __( 'Table', 'low-product-table-editor' ),
-				'history'        => __( 'History', 'low-product-table-editor' ),
-				'historyTooltip' => __( 'Available in a later release', 'low-product-table-editor' ),
-				'noscript'       => __( 'The table editor requires JavaScript.', 'low-product-table-editor' ),
-				'sections'       => __( 'Editor sections', 'low-product-table-editor' ),
+				'loading'              => __( 'Loading editor...', 'low-product-table-editor' ),
+				'title'                => __( 'Table Editor', 'low-product-table-editor' ),
+				'table'                => __( 'Table', 'low-product-table-editor' ),
+				'history'              => __( 'History', 'low-product-table-editor' ),
+				'historyTooltip'       => __( 'Available in a later release', 'low-product-table-editor' ),
+				'noscript'             => __( 'The table editor requires JavaScript.', 'low-product-table-editor' ),
+				'sections'             => __( 'Editor sections', 'low-product-table-editor' ),
+				'search'               => __( 'Search', 'low-product-table-editor' ),
+				'category'             => __( 'Category', 'low-product-table-editor' ),
+				'productType'          => __( 'Type', 'low-product-table-editor' ),
+				'stockStatus'          => __( 'Stock status', 'low-product-table-editor' ),
+				'postStatus'           => __( 'Status', 'low-product-table-editor' ),
+				'perPage'              => __( 'Per page', 'low-product-table-editor' ),
+				'allCategories'        => __( 'All categories', 'low-product-table-editor' ),
+				'allTypes'             => __( 'All types', 'low-product-table-editor' ),
+				'allStock'             => __( 'All stock statuses', 'low-product-table-editor' ),
+				'allStatuses'          => __( 'All statuses', 'low-product-table-editor' ),
+				'simple'               => __( 'Simple', 'low-product-table-editor' ),
+				'variable'             => __( 'Variable', 'low-product-table-editor' ),
+				'inStock'              => __( 'In stock', 'low-product-table-editor' ),
+				'outOfStock'           => __( 'Out of stock', 'low-product-table-editor' ),
+				'onBackorder'          => __( 'On backorder', 'low-product-table-editor' ),
+				'inherited'            => __( 'Inherited (parent)', 'low-product-table-editor' ),
+				'statusPublish'        => __( 'Published', 'low-product-table-editor' ),
+				'statusDraft'          => __( 'Draft', 'low-product-table-editor' ),
+				'statusPrivate'        => __( 'Private', 'low-product-table-editor' ),
+				'statusPending'        => __( 'Pending', 'low-product-table-editor' ),
+				'clearFilters'         => __( 'Clear filters', 'low-product-table-editor' ),
+				'expandAll'            => __( 'Expand all', 'low-product-table-editor' ),
+				'collapseAll'          => __( 'Collapse all', 'low-product-table-editor' ),
+				'columnProduct'        => __( 'Product', 'low-product-table-editor' ),
+				'columnSoldBy'         => __( 'Sold By', 'low-product-table-editor' ),
+				'columnRegularPrice'   => __( 'Regular price', 'low-product-table-editor' ),
+				'columnSalePrice'      => __( 'Sale price', 'low-product-table-editor' ),
+				'columnStock'          => __( 'Stock', 'low-product-table-editor' ),
+				'columnSku'            => __( 'SKU', 'low-product-table-editor' ),
+				'columnWeight'         => __( 'Weight', 'low-product-table-editor' ),
+				'columnDescription'    => __( 'Description', 'low-product-table-editor' ),
+				'columnStatus'         => __( 'Status', 'low-product-table-editor' ),
+				// translators: %s: number of variations.
+				'variationCount'       => __( '%s variations', 'low-product-table-editor' ),
+				// translators: %s: number of variations.
+				'variationCountSingle' => __( '%s variation', 'low-product-table-editor' ),
+				// translators: 1: first product number, 2: last product number, 3: total products.
+				'showing'              => __( 'Showing %1$s to %2$s of %3$s products', 'low-product-table-editor' ),
+				'prev'                 => __( 'Previous', 'low-product-table-editor' ),
+				'next'                 => __( 'Next', 'low-product-table-editor' ),
+				// translators: %s: page number.
+				'pageNumber'           => __( 'Page %s', 'low-product-table-editor' ),
+				'pagination'           => __( 'Pagination', 'low-product-table-editor' ),
+				'empty'                => __( 'No products match these filters', 'low-product-table-editor' ),
+				'retry'                => __( 'Retry', 'low-product-table-editor' ),
+				'loadError'            => __( 'Products could not be loaded. Try again.', 'low-product-table-editor' ),
+				'sessionExpired'       => __( 'Your session expired. Reload the page.', 'low-product-table-editor' ),
 			),
 		);
+	}
+
+	/**
+	 * Plugin version plus the asset file time, so a new grid loads without a release.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @param string $relative Path relative to the plugin root.
+	 * @return string
+	 */
+	private function asset_version( string $relative ): string {
+		$path  = LOW_PTE_DIR . ltrim( $relative, '/' );
+		$mtime = is_readable( $path ) ? filemtime( $path ) : false;
+
+		if ( false === $mtime ) {
+			return LOW_PTE_VERSION;
+		}
+
+		return LOW_PTE_VERSION . '.' . $mtime;
 	}
 
 	/**
