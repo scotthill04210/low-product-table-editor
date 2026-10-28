@@ -1,0 +1,74 @@
+/**
+ * LOW Product Table Editor admin styles.
+ */
+
+.low-pte-wrap {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+}
+
+.low-pte-tabs {
+	border-bottom: 1px solid #c3c4c7;
+	display: flex;
+	gap: 4px;
+	margin-top: 12px;
+}
+
+.low-pte-tab-slot {
+	display: inline-flex;
+}
+
+.low-pte-tab {
+	background: #f6f7f7;
+	border: 1px solid #c3c4c7;
+	border-bottom: 0;
+	border-radius: 2px 2px 0 0;
+	color: #1d2327;
+	cursor: pointer;
+	font-family: inherit;
+	font-size: 13px;
+	line-height: 1.4;
+	margin: 0;
+	padding: 8px 14px;
+	position: relative;
+	top: 1px;
+}
+
+.low-pte-tab-active {
+	background: #fff;
+	font-weight: 600;
+}
+
+.low-pte-tab:disabled,
+.low-pte-tab[aria-disabled="true"] {
+	color: #646970;
+	cursor: not-allowed;
+	pointer-events: none;
+}
+
+.low-pte-wrap button:focus-visible,
+.low-pte-wrap a:focus-visible,
+.low-pte-wrap input:focus-visible,
+.low-pte-wrap select:focus-visible,
+.low-pte-wrap textarea:focus-visible {
+	outline: 2px solid #2271b1;
+	outline-offset: 2px;
+}
+
+.low-pte-app {
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-top: 0;
+	min-height: 280px;
+	padding: 20px;
+}
+
+.low-pte-loading,
+.low-pte-placeholder,
+.low-pte-noscript {
+	color: #1d2327;
+	margin: 0;
+}
+
+.low-pte-noscript {
+	margin-top: 12px;
+}

@@ -1,0 +1,14 @@
+docs/
+tools/
+.github/
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+.distignore
+build/
+*.zip
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

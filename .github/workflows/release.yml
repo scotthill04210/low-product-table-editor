@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Verify the tag matches the plugin version
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+              sys.exit(f"Tag {tag} must look like vX.Y.Z")
+
+          version = tag[1:]
+          text = pathlib.Path("low-product-table-editor.php").read_text(encoding="utf-8")
+          header = re.search(r"^\s*\*\s*Version:\s*(\S+)\s*$", text, re.M)
+          constant = re.search(r"define\(\s*'LOW_PTE_VERSION',\s*'([^']+)'\s*\)", text)
+          header_version = header.group(1) if header else ""
+          constant_version = constant.group(1) if constant else ""
+
+          if version != header_version or version != constant_version:
+              sys.exit(
+                  f"Tag {version} does not match header {header_version} or constant {constant_version}"
+              )
+
+          print(f"Version {version} matches the plugin header and constant")
+          PY
+
+      - name: Build the plugin zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build low-product-table-editor.zip
+          mkdir -p build/low-product-table-editor
+          rsync -a --exclude-from=.distignore ./ build/low-product-table-editor/
+          (
+            cd build
+            zip -qr ../low-product-table-editor.zip low-product-table-editor
+          )
+          unzip -l low-product-table-editor.zip > build/listing.txt
+          grep -q "low-product-table-editor/low-product-table-editor.php" build/listing.txt
+          if grep -E "low-product-table-editor/(docs|tools)/" build/listing.txt; then
+            echo "Zip contains docs or tools."
+            exit 1
+          fi
+
+      - name: Publish the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: low-product-table-editor.zip
+          generate_release_notes: true
