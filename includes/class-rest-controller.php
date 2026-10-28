@@ -12,7 +12,7 @@ namespace LOW\ProductTableEditor;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Read-only products route.
+ * Product list and edit routes.
  *
  * @since 0.1.0
  */
@@ -64,7 +64,7 @@ class Rest_Controller {
 	}
 
 	/**
-	 * Register GET /products.
+	 * Register the product routes.
 	 *
 	 * @since 0.1.0
 	 *
@@ -81,6 +81,95 @@ class Rest_Controller {
 				'args'                => $this->query_args(),
 			)
 		);
+
+		register_rest_route(
+			'low-pte/v1',
+			'/items/(?P<id>\d+)',
+			array(
+				'methods'             => \WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_item' ),
+				'permission_callback' => array( $this, 'permissions_check' ),
+				'args'                => array(
+					'id' => array(
+						'description' => __( 'Product or variation ID.', 'low-product-table-editor' ),
+						'type'        => 'integer',
+						'required'    => true,
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			'low-pte/v1',
+			'/items',
+			array(
+				'methods'             => 'PATCH',
+				'callback'            => array( $this, 'update_items' ),
+				'permission_callback' => array( $this, 'permissions_check' ),
+			)
+		);
+	}
+
+	/**
+	 * Return one product or variation, including description fields.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function get_item( \WP_REST_Request $request ): \WP_REST_Response|\WP_Error {
+		$id  = (int) $request->get_param( 'id' );
+		$row = $this->products->get_item( $id );
+
+		if ( null === $row ) {
+			return new \WP_Error(
+				'low_pte_not_found',
+				__( 'Product not found.', 'low-product-table-editor' ),
+				array( 'status' => 404 )
+			);
+		}
+
+		if ( ! current_user_can( 'edit_post', $id ) ) {
+			return new \WP_Error(
+				'low_pte_forbidden',
+				__( 'You are not allowed to edit this item.', 'low-product-table-editor' ),
+				array( 'status' => 403 )
+			);
+		}
+
+		return rest_ensure_response( $row );
+	}
+
+	/**
+	 * Save a batch of at most 50 items.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function update_items( \WP_REST_Request $request ): \WP_REST_Response|\WP_Error {
+		$body  = $request->get_json_params();
+		$items = ( is_array( $body ) && isset( $body['items'] ) && is_array( $body['items'] ) ) ? $body['items'] : null;
+
+		if ( null === $items ) {
+			return new \WP_Error(
+				'rest_invalid_param',
+				__( 'Items are required.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		if ( 50 < count( $items ) ) {
+			return new \WP_Error(
+				'low_pte_too_many_items',
+				__( 'A request can include at most 50 items.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return rest_ensure_response( $this->products->update_items( $items ) );
 	}
 
 	/**

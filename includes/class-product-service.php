@@ -1,6 +1,6 @@
 <?php
 /**
- * Read-only product queries for the table editor.
+ * Product queries and edits for the table editor.
  *
  * @package LOW\ProductTableEditor
  */
@@ -12,7 +12,7 @@ namespace LOW\ProductTableEditor;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Loads parent products and their variations in batched queries.
+ * Loads parent products and their variations, and saves edited fields.
  *
  * @since 0.1.0
  */
@@ -126,7 +126,7 @@ class Product_Service {
 		$children_by_parent = array();
 		foreach ( $variation_products as $variation ) {
 			$parent_id                          = $variation->get_parent_id();
-			$children_by_parent[ $parent_id ][] = $this->to_row( $variation );
+			$children_by_parent[ $parent_id ][] = $this->build_row( $variation );
 		}
 
 		$items = array();
@@ -136,7 +136,7 @@ class Product_Service {
 				continue;
 			}
 			$children = $children_by_parent[ $parent_id ] ?? array();
-			$row      = $this->to_row( $parent, count( $children ) );
+			$row      = $this->build_row( $parent, count( $children ) );
 			if ( $parent->is_type( 'variable' ) ) {
 				$row['children'] = $children;
 			}
@@ -149,6 +149,56 @@ class Product_Service {
 			'total_pages' => $pages,
 			'page'        => $page,
 			'per_page'    => $per_page,
+		);
+	}
+
+	/**
+	 * One product or variation, including the full description fields.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param int $id Product or variation ID.
+	 * @return array<string, mixed>|null Null when the ID is not a supported product.
+	 */
+	public function get_item( int $id ): ?array {
+		$product = wc_get_product( $id );
+		if ( ! $product instanceof \WC_Product || ! $this->is_supported_product( $product ) ) {
+			return null;
+		}
+
+		return $this->detail_row( $product );
+	}
+
+	/**
+	 * Validate and save a batch.
+	 *
+	 * Every item is checked for a conflict before the first write, so a parent
+	 * and its variation in the same request cannot conflict with each other.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param array<int, mixed> $items Requested items.
+	 * @return array{results: array<int, array<string, mixed>>}
+	 */
+	public function update_items( array $items ): array {
+		$plans = array();
+
+		foreach ( $items as $item ) {
+			$plans[] = $this->plan_item( $item );
+		}
+
+		$results = array();
+		foreach ( $plans as $plan ) {
+			if ( 'ready' !== $plan['status'] ) {
+				$results[] = $plan['result'];
+				continue;
+			}
+
+			$results[] = $this->write_item( $plan['id'], $plan['fields'] );
+		}
+
+		return array(
+			'results' => $results,
 		);
 	}
 
@@ -384,7 +434,7 @@ class Product_Service {
 	 * @param int         $variation_count  Nested variation count for variable parents.
 	 * @return array<string, mixed>
 	 */
-	private function to_row( \WC_Product $product, int $variation_count = 0 ): array {
+	public function build_row( \WC_Product $product, int $variation_count = 0 ): array {
 		$is_variation = $product->is_type( 'variation' );
 		$is_variable  = $product->is_type( 'variable' );
 		$link         = get_edit_post_link( $product->get_id(), 'raw' );
@@ -445,12 +495,11 @@ class Product_Service {
 	 * @return bool|string
 	 */
 	private function manage_stock_value( \WC_Product $product ): bool|string {
-		$value = $product->get_manage_stock( 'edit' );
-		if ( $product->is_type( 'variation' ) && 'parent' === $value ) {
+		if ( $product->is_type( 'variation' ) && 'parent' === $product->get_manage_stock() ) {
 			return 'parent';
 		}
 
-		return (bool) $value;
+		return (bool) $product->get_manage_stock( 'edit' );
 	}
 
 	/**
@@ -490,7 +539,7 @@ class Product_Service {
 	}
 
 	/**
-	 * Unix timestamp for conflict checks in a later phase.
+	 * Unix timestamp for conflict checks.
 	 *
 	 * @since 0.1.0
 	 *
@@ -769,5 +818,1029 @@ class Product_Service {
 		}
 
 		return '';
+	}
+
+	/**
+	 * Simple products, variable parents, and variations only.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product.
+	 * @return bool
+	 */
+	private function is_supported_product( \WC_Product $product ): bool {
+		return in_array( $product->get_type(), array( 'simple', 'variable', 'variation' ), true );
+	}
+
+	/**
+	 * Grid row plus the description fields the modal edits.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @return array<string, mixed>
+	 */
+	private function detail_row( \WC_Product $product ): array {
+		$row                = $this->row_for( $product );
+		$row['description'] = (string) $product->get_description( 'edit' );
+
+		if ( ! $product->is_type( 'variation' ) ) {
+			$row['short_description'] = (string) $product->get_short_description( 'edit' );
+		}
+
+		return $row;
+	}
+
+	/**
+	 * Grid row for one product. Children are not included.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @return array<string, mixed>
+	 */
+	private function row_for( \WC_Product $product ): array {
+		if ( $product->is_type( 'variation' ) ) {
+			$this->prime_attribute_terms( array( $product ) );
+		}
+
+		$count = 0;
+		if ( $product->is_type( 'variable' ) ) {
+			$children = $product->get_children();
+			$count    = is_array( $children ) ? count( $children ) : 0;
+		}
+
+		return $this->build_row( $product, $count );
+	}
+
+	/**
+	 * Read a product after its cache has been cleared.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param int $id Product or variation ID.
+	 * @return \WC_Product|null
+	 */
+	private function reload_product( int $id ): ?\WC_Product {
+		if ( $id < 1 ) {
+			return null;
+		}
+
+		clean_post_cache( $id );
+		if ( function_exists( 'wc_delete_product_transients' ) ) {
+			wc_delete_product_transients( $id );
+		}
+
+		$product = wc_get_product( $id );
+		if ( ! $product instanceof \WC_Product ) {
+			return null;
+		}
+
+		return $product;
+	}
+
+	/**
+	 * Conflict and shape checks for one item, before any write.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param mixed $item Requested item.
+	 * @return array<string, mixed>
+	 */
+	private function plan_item( mixed $item ): array {
+		if ( ! is_array( $item ) ) {
+			return array(
+				'status' => 'error',
+				'result' => $this->item_result( 0, 'error', $this->item_shape_message(), array(), null ),
+			);
+		}
+
+		$id = isset( $item['id'] ) ? absint( $item['id'] ) : 0;
+		if ( $id < 1 || ! array_key_exists( 'date_modified', $item ) || ! isset( $item['fields'] ) || ! is_array( $item['fields'] ) || array() === $item['fields'] ) {
+			return array(
+				'status' => 'error',
+				'result' => $this->item_result( $id, 'error', $this->item_shape_message(), array(), null ),
+			);
+		}
+
+		$product = wc_get_product( $id );
+		if ( ! $product instanceof \WC_Product || ! $this->is_supported_product( $product ) ) {
+			return array(
+				'status' => 'error',
+				'result' => $this->item_result( $id, 'error', __( 'Product not found.', 'low-product-table-editor' ), array(), null ),
+			);
+		}
+
+		$posted = is_numeric( $item['date_modified'] ) ? (int) $item['date_modified'] : -1;
+		if ( $posted !== $this->modified_timestamp( $product ) ) {
+			return array(
+				'status' => 'conflict',
+				'result' => $this->item_result(
+					$id,
+					'conflict',
+					__( 'This item was changed by someone else. Reload the row to see the latest values.', 'low-product-table-editor' ),
+					array(),
+					$this->row_for( $product )
+				),
+			);
+		}
+
+		if ( ! current_user_can( 'edit_post', $id ) ) {
+			return array(
+				'status' => 'error',
+				'result' => $this->item_result( $id, 'error', __( 'You are not allowed to edit this item.', 'low-product-table-editor' ), array(), null ),
+			);
+		}
+
+		return array(
+			'status' => 'ready',
+			'id'     => $id,
+			'fields' => $item['fields'],
+		);
+	}
+
+	/**
+	 * Message for an item that is missing id, date_modified, or fields.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @return string
+	 */
+	private function item_shape_message(): string {
+		return __( 'Each item needs an id, a date modified, and fields.', 'low-product-table-editor' );
+	}
+
+	/**
+	 * Validate one item, then save it.
+	 *
+	 * The product is loaded again here so an earlier variation save in this
+	 * batch can sync the parent before the parent fields are applied.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param int                  $id     Product or variation ID.
+	 * @param array<string, mixed> $fields Edited fields.
+	 * @return array<string, mixed>
+	 */
+	private function write_item( int $id, array $fields ): array {
+		$product = $this->reload_product( $id );
+		if ( ! $product instanceof \WC_Product || ! $this->is_supported_product( $product ) ) {
+			return $this->item_result( $id, 'error', __( 'Product not found.', 'low-product-table-editor' ), array(), null );
+		}
+
+		$checked = $this->validate_fields( $product, $fields );
+		if ( array() !== $checked['errors'] ) {
+			return $this->item_result(
+				$id,
+				'error',
+				__( 'Some fields could not be saved.', 'low-product-table-editor' ),
+				$checked['errors'],
+				$this->row_for( $product )
+			);
+		}
+
+		try {
+			if ( $this->apply_fields( $product, $checked['values'] ) ) {
+				$product->save();
+			}
+		} catch ( \WC_Data_Exception $exception ) {
+			$reloaded = $this->reload_product( $id );
+			$message  = $exception->getMessage();
+			$errors   = array();
+			if ( array_key_exists( 'sku', $fields ) ) {
+				$errors['sku'] = $message;
+			}
+
+			return $this->item_result(
+				$id,
+				'error',
+				$message,
+				$errors,
+				$reloaded instanceof \WC_Product ? $this->row_for( $reloaded ) : null
+			);
+		} catch ( \Throwable $exception ) {
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Logged only while WP_DEBUG is on.
+				error_log( 'LOW Product Table Editor: ' . $exception->getMessage() );
+			}
+
+			$reloaded = $this->reload_product( $id );
+
+			return $this->item_result(
+				$id,
+				'error',
+				__( 'The changes could not be saved.', 'low-product-table-editor' ),
+				array(),
+				$reloaded instanceof \WC_Product ? $this->row_for( $reloaded ) : null
+			);
+		}
+
+		$fresh  = $this->reload_product( $id );
+		$source = $fresh instanceof \WC_Product ? $fresh : $product;
+		$parent = null;
+
+		if ( $source->is_type( 'variation' ) ) {
+			$parent_product = $this->reload_product( $source->get_parent_id() );
+			if ( $parent_product instanceof \WC_Product ) {
+				$parent = $this->row_for( $parent_product );
+			}
+		}
+
+		return $this->item_result( $id, 'ok', '', array(), $this->row_for( $source ), $parent );
+	}
+
+	/**
+	 * One result object for the PATCH response.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param int                       $id      Product ID.
+	 * @param string                    $status  ok, error, or conflict.
+	 * @param string                    $message Human-readable message.
+	 * @param array<string, string>     $errors  Field messages.
+	 * @param array<string, mixed>|null $item    Fresh row, when one exists.
+	 * @param array<string, mixed>|null $parent_row Fresh parent row for a variation.
+	 * @return array<string, mixed>
+	 */
+	private function item_result( int $id, string $status, string $message, array $errors, ?array $item, ?array $parent_row = null ): array {
+		$result = array(
+			'id'      => $id,
+			'status'  => $status,
+			'message' => $message,
+			'errors'  => $errors,
+			'item'    => $item,
+		);
+
+		if ( null !== $parent_row ) {
+			$result['parent'] = $parent_row;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Fields that can be edited for this product type.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @return array<int, string>
+	 */
+	private function editable_fields( \WC_Product $product ): array {
+		if ( $product->is_type( 'variable' ) ) {
+			return array( 'sku', 'name', 'status', 'catalog_visibility', 'description', 'short_description' );
+		}
+
+		if ( $product->is_type( 'variation' ) ) {
+			return array( 'regular_price', 'sale_price', 'sku', 'weight', 'manage_stock', 'stock_quantity', 'stock_status', 'description' );
+		}
+
+		if ( $product->is_type( 'simple' ) ) {
+			return array( 'regular_price', 'sale_price', 'sku', 'weight', 'manage_stock', 'stock_quantity', 'stock_status', 'name', 'status', 'catalog_visibility', 'description', 'short_description' );
+		}
+
+		return array();
+	}
+
+	/**
+	 * Validate every field. Values are returned only when the item is valid.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param array<string, mixed> $fields  Requested fields.
+	 * @return array{errors: array<string, string>, values: array<string, mixed>}
+	 */
+	private function validate_fields( \WC_Product $product, array $fields ): array {
+		$allowed = $this->editable_fields( $product );
+		$errors  = array();
+		$values  = array();
+
+		foreach ( $fields as $field => $value ) {
+			$name = (string) $field;
+			if ( ! in_array( $name, $allowed, true ) ) {
+				$errors[ $name ] = __( 'This field cannot be edited.', 'low-product-table-editor' );
+				continue;
+			}
+
+			$checked = $this->validate_field( $product, $name, $value, $fields );
+			if ( isset( $checked['message'] ) ) {
+				$errors[ $name ] = $checked['message'];
+				continue;
+			}
+
+			$values[ $name ] = $checked['value'];
+		}
+
+		return array(
+			'errors' => $errors,
+			'values' => array() === $errors ? $values : array(),
+		);
+	}
+
+	/**
+	 * Validate one field.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param string               $field   Field name.
+	 * @param mixed                $value   Raw value.
+	 * @param array<string, mixed> $fields  All requested fields.
+	 * @return array{value?: mixed, message?: string}
+	 */
+	private function validate_field( \WC_Product $product, string $field, mixed $value, array $fields ): array {
+		switch ( $field ) {
+			case 'regular_price':
+				return $this->validate_regular_price( $product, $value, $fields );
+			case 'sale_price':
+				return $this->validate_sale_price( $product, $value, $fields );
+			case 'sku':
+				return $this->validate_text( $value );
+			case 'weight':
+				return $this->validate_weight( $value );
+			case 'manage_stock':
+				return $this->validate_manage_stock( $product, $value );
+			case 'stock_quantity':
+				return $this->validate_stock_quantity( $product, $value, $fields );
+			case 'stock_status':
+				return $this->validate_stock_status( $product, $value, $fields );
+			case 'name':
+				return $this->validate_name( $value );
+			case 'status':
+				return $this->validate_choice( $value, array( 'publish', 'draft', 'private' ), __( 'Invalid status.', 'low-product-table-editor' ) );
+			case 'catalog_visibility':
+				return $this->validate_choice( $value, array( 'visible', 'catalog', 'search', 'hidden' ), __( 'Invalid catalog visibility.', 'low-product-table-editor' ) );
+			case 'description':
+			case 'short_description':
+				return $this->validate_html( $value );
+		}
+
+		return array(
+			'message' => __( 'This field cannot be edited.', 'low-product-table-editor' ),
+		);
+	}
+
+	/**
+	 * Regular price is required and keeps up to 4 decimal places.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param mixed                $value   Raw value.
+	 * @param array<string, mixed> $fields  All requested fields.
+	 * @return array{value?: string, message?: string}
+	 */
+	private function validate_regular_price( \WC_Product $product, mixed $value, array $fields ): array {
+		$parsed = $this->parse_price( $value, false );
+		if ( isset( $parsed['message'] ) ) {
+			return $parsed;
+		}
+
+		$sale = $this->resulting_sale_price( $product, $fields );
+		if ( '' !== $sale && 0 <= $this->decimal_compare( $sale, $parsed['value'] ) ) {
+			return array(
+				'message' => __( 'Sale price must be lower than the regular price.', 'low-product-table-editor' ),
+			);
+		}
+
+		return $parsed;
+	}
+
+	/**
+	 * Sale price may be cleared. A value must be lower than the resulting regular price.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param mixed                $value   Raw value.
+	 * @param array<string, mixed> $fields  All requested fields.
+	 * @return array{value?: string, message?: string}
+	 */
+	private function validate_sale_price( \WC_Product $product, mixed $value, array $fields ): array {
+		$parsed = $this->parse_price( $value, true );
+		if ( isset( $parsed['message'] ) || '' === $parsed['value'] ) {
+			return $parsed;
+		}
+
+		$regular = $this->resulting_regular_price( $product, $fields );
+		if ( '' === $regular || 0 <= $this->decimal_compare( $parsed['value'], $regular ) ) {
+			return array(
+				'message' => __( 'Sale price must be lower than the regular price.', 'low-product-table-editor' ),
+			);
+		}
+
+		return $parsed;
+	}
+
+	/**
+	 * Parse a price. An empty regular price is rejected.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param mixed $value   Raw value.
+	 * @param bool  $allow_empty Whether an empty string clears the price.
+	 * @return array{value?: string, message?: string}
+	 */
+	private function parse_price( mixed $value, bool $allow_empty ): array {
+		if ( ! is_scalar( $value ) ) {
+			return array(
+				'message' => __( 'Use a number with up to 4 decimal places.', 'low-product-table-editor' ),
+			);
+		}
+
+		$raw = trim( (string) $value );
+		if ( '' === $raw ) {
+			if ( $allow_empty ) {
+				return array(
+					'value' => '',
+				);
+			}
+
+			return array(
+				'message' => __( 'Regular price is required.', 'low-product-table-editor' ),
+			);
+		}
+
+		if ( ! preg_match( '/^\d+(\.\d{1,4})?$/', $raw ) ) {
+			return array(
+				'message' => __( 'Use a number with up to 4 decimal places.', 'low-product-table-editor' ),
+			);
+		}
+
+		return array(
+			'value' => $this->format_price( $raw ),
+		);
+	}
+
+	/**
+	 * Regular price after this request is applied.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param array<string, mixed> $fields  All requested fields.
+	 * @return string
+	 */
+	private function resulting_regular_price( \WC_Product $product, array $fields ): string {
+		if ( array_key_exists( 'regular_price', $fields ) ) {
+			$parsed = $this->parse_price( $fields['regular_price'], false );
+			if ( isset( $parsed['value'] ) ) {
+				return $parsed['value'];
+			}
+		}
+
+		return $this->price_value( $product, 'regular' );
+	}
+
+	/**
+	 * Sale price after this request is applied.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param array<string, mixed> $fields  All requested fields.
+	 * @return string
+	 */
+	private function resulting_sale_price( \WC_Product $product, array $fields ): string {
+		if ( array_key_exists( 'sale_price', $fields ) ) {
+			$parsed = $this->parse_price( $fields['sale_price'], true );
+			if ( isset( $parsed['value'] ) ) {
+				return $parsed['value'];
+			}
+		}
+
+		return $this->price_value( $product, 'sale' );
+	}
+
+	/**
+	 * Store a price with at least 4 decimal places so 0.3299 is not rounded.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string $value Price text.
+	 * @return string
+	 */
+	private function format_price( string $value ): string {
+		return (string) wc_format_decimal( $value, $this->price_decimals() );
+	}
+
+	/**
+	 * Shop decimals, but never fewer than 4 while this editor saves a price.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @return int
+	 */
+	private function price_decimals(): int {
+		$option = get_option( 'woocommerce_price_num_decimals', 2 );
+		$count  = is_numeric( $option ) ? (int) $option : 2;
+
+		return max( 4, $count );
+	}
+
+	/**
+	 * Compare two decimal strings.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string $left  Left decimal.
+	 * @param string $right Right decimal.
+	 * @return int -1, 0, or 1.
+	 */
+	private function decimal_compare( string $left, string $right ): int {
+		$scale = $this->price_decimals();
+		$left  = (string) wc_format_decimal( $left, $scale );
+		$right = (string) wc_format_decimal( $right, $scale );
+
+		if ( function_exists( 'bccomp' ) ) {
+			return bccomp( $left, $right, $scale );
+		}
+
+		$left_number  = (float) $left;
+		$right_number = (float) $right;
+		if ( abs( $left_number - $right_number ) < 0.0000001 ) {
+			return 0;
+		}
+
+		return ( $left_number < $right_number ) ? -1 : 1;
+	}
+
+	/**
+	 * Clean a short text field such as SKU.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param mixed $value Raw value.
+	 * @return array{value?: string, message?: string}
+	 */
+	private function validate_text( mixed $value ): array {
+		if ( ! is_scalar( $value ) ) {
+			return array(
+				'message' => __( 'This value is not valid.', 'low-product-table-editor' ),
+			);
+		}
+
+		return array(
+			'value' => wc_clean( (string) $value ),
+		);
+	}
+
+	/**
+	 * Weight is empty or a non-negative decimal.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param mixed $value Raw value.
+	 * @return array{value?: string, message?: string}
+	 */
+	private function validate_weight( mixed $value ): array {
+		if ( ! is_scalar( $value ) ) {
+			return array(
+				'message' => __( 'Weight must be zero or greater.', 'low-product-table-editor' ),
+			);
+		}
+
+		$raw = trim( (string) $value );
+		if ( '' === $raw ) {
+			return array(
+				'value' => '',
+			);
+		}
+
+		if ( ! preg_match( '/^\d+(\.\d+)?$/', $raw ) ) {
+			return array(
+				'message' => __( 'Weight must be zero or greater.', 'low-product-table-editor' ),
+			);
+		}
+
+		return array(
+			'value' => (string) wc_format_decimal( $raw ),
+		);
+	}
+
+	/**
+	 * Stock management. Variations may inherit the parent.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @param mixed       $value   Raw value.
+	 * @return array{value?: bool|string, message?: string}
+	 */
+	private function validate_manage_stock( \WC_Product $product, mixed $value ): array {
+		$normalized = $this->normalize_manage_stock( $product, $value );
+		if ( null === $normalized ) {
+			$message = $product->is_type( 'variation' )
+				? __( 'Choose Yes, No, or Inherit from parent.', 'low-product-table-editor' )
+				: __( 'Choose Yes or No.', 'low-product-table-editor' );
+
+			return array(
+				'message' => $message,
+			);
+		}
+
+		if ( 'parent' === $normalized && ! $this->parent_manages_stock( $product ) ) {
+			return array(
+				'message' => __( 'Inherit from parent is only available when the parent product manages stock.', 'low-product-table-editor' ),
+			);
+		}
+
+		if ( false === $normalized && $product->is_type( 'variation' ) && $this->parent_manages_stock( $product ) ) {
+			return array(
+				'message' => __( 'Stock is inherited from the parent. Choose Yes to manage stock on this variation.', 'low-product-table-editor' ),
+			);
+		}
+
+		return array(
+			'value' => $normalized,
+		);
+	}
+
+	/**
+	 * Whether the parent product manages its own stock.
+	 *
+	 * WooCommerce reports a variation as parent only in that case. The stored
+	 * value is still the boolean from set_manage_stock().
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Variation.
+	 * @return bool
+	 */
+	private function parent_manages_stock( \WC_Product $product ): bool {
+		if ( ! $product->is_type( 'variation' ) ) {
+			return false;
+		}
+
+		$parent = wc_get_product( $product->get_parent_id() );
+		if ( ! $parent instanceof \WC_Product ) {
+			return false;
+		}
+
+		return true === (bool) $parent->get_manage_stock( 'edit' );
+	}
+
+	/**
+	 * Normalize a stock-management value, or return null when it is invalid.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @param mixed       $value   Raw value.
+	 * @return bool|string|null
+	 */
+	private function normalize_manage_stock( \WC_Product $product, mixed $value ): bool|string|null {
+		if ( $product->is_type( 'variation' ) && 'parent' === $value ) {
+			return 'parent';
+		}
+
+		if ( true === $value || 1 === $value || '1' === $value || 'true' === $value || 'yes' === $value ) {
+			return true;
+		}
+
+		if ( false === $value || 0 === $value || '0' === $value || 'false' === $value || 'no' === $value ) {
+			return false;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Quantity is a whole number, and only while stock is managed on this item.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param mixed                $value   Raw value.
+	 * @param array<string, mixed> $fields  All requested fields.
+	 * @return array{value?: int, message?: string}
+	 */
+	private function validate_stock_quantity( \WC_Product $product, mixed $value, array $fields ): array {
+		if ( true !== $this->resulting_manage_stock( $product, $fields ) ) {
+			return array(
+				'message' => __( 'Stock quantity can only be set when stock is managed.', 'low-product-table-editor' ),
+			);
+		}
+
+		if ( is_int( $value ) || ( is_string( $value ) && 1 === preg_match( '/^-?\d+$/', $value ) ) ) {
+			return array(
+				'value' => (int) $value,
+			);
+		}
+
+		return array(
+			'message' => __( 'Stock quantity must be a whole number.', 'low-product-table-editor' ),
+		);
+	}
+
+	/**
+	 * Stock status is not editable while quantity manages it.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param mixed                $value   Raw value.
+	 * @param array<string, mixed> $fields  All requested fields.
+	 * @return array{value?: string, message?: string}
+	 */
+	private function validate_stock_status( \WC_Product $product, mixed $value, array $fields ): array {
+		if ( true === $this->resulting_manage_stock( $product, $fields ) ) {
+			return array(
+				'message' => __( 'Stock status is set from the quantity when stock is managed.', 'low-product-table-editor' ),
+			);
+		}
+
+		return $this->validate_choice(
+			$value,
+			array( 'instock', 'outofstock', 'onbackorder' ),
+			__( 'Invalid stock status.', 'low-product-table-editor' )
+		);
+	}
+
+	/**
+	 * Stock management after this request is applied.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param array<string, mixed> $fields  All requested fields.
+	 * @return bool|string
+	 */
+	private function resulting_manage_stock( \WC_Product $product, array $fields ): bool|string {
+		if ( array_key_exists( 'manage_stock', $fields ) ) {
+			$normalized = $this->normalize_manage_stock( $product, $fields['manage_stock'] );
+			if ( null !== $normalized ) {
+				return $normalized;
+			}
+		}
+
+		return $this->manage_stock_value( $product );
+	}
+
+	/**
+	 * Product name is required and limited to 200 characters.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param mixed $value Raw value.
+	 * @return array{value?: string, message?: string}
+	 */
+	private function validate_name( mixed $value ): array {
+		if ( ! is_scalar( $value ) ) {
+			return array(
+				'message' => __( 'Name is required.', 'low-product-table-editor' ),
+			);
+		}
+
+		$name = wc_clean( (string) $value );
+		if ( '' === $name ) {
+			return array(
+				'message' => __( 'Name is required.', 'low-product-table-editor' ),
+			);
+		}
+
+		$length = function_exists( 'mb_strlen' ) ? mb_strlen( $name ) : strlen( $name );
+		if ( 200 < $length ) {
+			return array(
+				'message' => __( 'Name must be 200 characters or fewer.', 'low-product-table-editor' ),
+			);
+		}
+
+		return array(
+			'value' => $name,
+		);
+	}
+
+	/**
+	 * One of a fixed list of strings.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param mixed              $value   Raw value.
+	 * @param array<int, string> $allowed Allowed values.
+	 * @param string             $message Error message.
+	 * @return array{value?: string, message?: string}
+	 */
+	private function validate_choice( mixed $value, array $allowed, string $message ): array {
+		if ( ! is_scalar( $value ) || ! in_array( (string) $value, $allowed, true ) ) {
+			return array(
+				'message' => $message,
+			);
+		}
+
+		return array(
+			'value' => (string) $value,
+		);
+	}
+
+	/**
+	 * Post content, with disallowed markup removed.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param mixed $value Raw value.
+	 * @return array{value?: string, message?: string}
+	 */
+	private function validate_html( mixed $value ): array {
+		if ( ! is_scalar( $value ) ) {
+			return array(
+				'message' => __( 'This value is not valid.', 'low-product-table-editor' ),
+			);
+		}
+
+		$text  = (string) $value;
+		$clean = wp_check_invalid_utf8( $text, true );
+		if ( ! is_string( $clean ) || ( '' === $clean && '' !== $text ) ) {
+			return array(
+				'message' => __( 'This value is not valid.', 'low-product-table-editor' ),
+			);
+		}
+
+		return array(
+			'value' => wp_kses_post( str_replace( "\0", '', $clean ) ),
+		);
+	}
+
+	/**
+	 * Apply values that differ from the stored ones.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param array<string, mixed> $values  Normalized values.
+	 * @return bool True when save() should run.
+	 */
+	private function apply_fields( \WC_Product $product, array $values ): bool {
+		$order   = array( 'name', 'status', 'catalog_visibility', 'description', 'short_description', 'sku', 'weight', 'regular_price', 'sale_price', 'manage_stock', 'stock_quantity', 'stock_status' );
+		$changed = false;
+
+		foreach ( $order as $field ) {
+			if ( ! array_key_exists( $field, $values ) ) {
+				continue;
+			}
+
+			$next = $values[ $field ];
+			if ( $this->field_matches( $field, $this->current_field( $product, $field ), $next ) ) {
+				continue;
+			}
+
+			$this->set_field( $product, $field, $next );
+			$changed = true;
+		}
+
+		return $changed;
+	}
+
+	/**
+	 * Whether the stored value already matches the next value.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param string $field   Field name.
+	 * @param mixed  $current Stored value.
+	 * @param mixed  $next    Next value.
+	 * @return bool
+	 */
+	private function field_matches( string $field, mixed $current, mixed $next ): bool {
+		if ( 'manage_stock' === $field ) {
+			return $current === $next;
+		}
+
+		if ( 'stock_quantity' === $field ) {
+			if ( null === $current || null === $next ) {
+				return null === $current && null === $next;
+			}
+
+			return (int) $current === (int) $next;
+		}
+
+		if ( 'regular_price' === $field || 'sale_price' === $field ) {
+			$left  = is_scalar( $current ) ? trim( (string) $current ) : '';
+			$right = is_scalar( $next ) ? trim( (string) $next ) : '';
+			if ( '' === $left || '' === $right ) {
+				return '' === $left && '' === $right;
+			}
+
+			return 0 === $this->decimal_compare( $left, $right );
+		}
+
+		return (string) $current === (string) $next;
+	}
+
+	/**
+	 * Stored value for one editable field.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @param string      $field   Field name.
+	 * @return mixed
+	 */
+	private function current_field( \WC_Product $product, string $field ): mixed {
+		switch ( $field ) {
+			case 'regular_price':
+				return $this->price_value( $product, 'regular' );
+			case 'sale_price':
+				return $this->price_value( $product, 'sale' );
+			case 'sku':
+				return (string) $product->get_sku( 'edit' );
+			case 'weight':
+				return (string) $product->get_weight( 'edit' );
+			case 'manage_stock':
+				return $this->manage_stock_value( $product );
+			case 'stock_quantity':
+				return $this->stock_quantity_value( $product );
+			case 'stock_status':
+				return (string) $product->get_stock_status( 'edit' );
+			case 'name':
+				return (string) $product->get_name();
+			case 'status':
+				return (string) $product->get_status();
+			case 'catalog_visibility':
+				return (string) $product->get_catalog_visibility( 'edit' );
+			case 'description':
+				return (string) $product->get_description( 'edit' );
+			case 'short_description':
+				return (string) $product->get_short_description( 'edit' );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Write one field through WooCommerce setters.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @param string      $field   Field name.
+	 * @param mixed       $value   Normalized value.
+	 * @return void
+	 */
+	private function set_field( \WC_Product $product, string $field, mixed $value ): void {
+		switch ( $field ) {
+			case 'regular_price':
+				$this->set_price( $product, 'regular', (string) $value );
+				break;
+			case 'sale_price':
+				$this->set_price( $product, 'sale', (string) $value );
+				break;
+			case 'sku':
+				$product->set_sku( (string) $value );
+				break;
+			case 'weight':
+				$product->set_weight( (string) $value );
+				break;
+			case 'manage_stock':
+				$product->set_manage_stock( $value );
+				break;
+			case 'stock_quantity':
+				$product->set_stock_quantity( (int) $value );
+				break;
+			case 'stock_status':
+				$product->set_stock_status( (string) $value );
+				break;
+			case 'name':
+				$product->set_name( (string) $value );
+				break;
+			case 'status':
+				$product->set_status( (string) $value );
+				break;
+			case 'catalog_visibility':
+				$product->set_catalog_visibility( (string) $value );
+				break;
+			case 'description':
+				$product->set_description( (string) $value );
+				break;
+			case 'short_description':
+				$product->set_short_description( (string) $value );
+				break;
+		}
+	}
+
+	/**
+	 * Set a price without letting a 2-decimal shop setting round 0.3299.
+	 *
+	 * @since 0.1.1
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @param string      $which   regular or sale.
+	 * @param string      $value   Formatted price, or an empty string to clear a sale price.
+	 * @return void
+	 */
+	private function set_price( \WC_Product $product, string $which, string $value ): void {
+		$decimals = $this->price_decimals();
+		$filter   = static function () use ( $decimals ): int {
+			return $decimals;
+		};
+
+		add_filter( 'woocommerce_price_num_decimals', $filter, 9999 );
+		if ( 'sale' === $which ) {
+			$product->set_sale_price( $value );
+		} else {
+			$product->set_regular_price( $value );
+		}
+		remove_filter( 'woocommerce_price_num_decimals', $filter, 9999 );
 	}
 }

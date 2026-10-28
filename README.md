@@ -2,11 +2,11 @@
 
 Admin-only WordPress plugin that edits WooCommerce products and variations in one spreadsheet-style table.
 
-**0.1.1** is the first published build. It adds the Products > Table Editor screen and updates from GitHub Releases. The working tree adds a read-only product grid. Inline editing, the audit log, bulk price changes, and undo are later releases.
+**0.1.1** is the first published build. It adds the Products > Table Editor screen and updates from GitHub Releases. The working tree adds the product grid and inline editing. The audit log, bulk price changes, and undo are later releases. The published 0.1.1 zip does not include the grid.
 
-## Read-only grid
+## Product grid
 
-Parent products and their variations render in one Tabulator table. `dataTree` is used instead of `groupBy` because parent rows must carry their own editable cells for simple products in phase 3. Prices are the raw stored strings, so a value such as 0.3299 is shown exactly as WooCommerce saved it. The product page number in the admin URL is `paged`, because `page` is already the WordPress screen slug.
+Parent products and their variations render in one Tabulator table. `dataTree` is used instead of `groupBy` because parent rows carry their own cells. Prices are the raw stored strings, so a value such as 0.3299 is shown exactly as WooCommerce saved it. Click a cell to edit. Description opens in a dialog and is kept locally until Save changes. The product page number in the admin URL is `paged`, because `page` is already the WordPress screen slug.
 
 ## Requirements
 
