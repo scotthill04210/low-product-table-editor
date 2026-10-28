@@ -182,11 +182,27 @@
 }
 
 .low-pte-product-cell {
-	align-items: center;
-	display: inline-flex;
-	gap: 8px;
+	display: inline-block;
+	max-width: calc(100% - 28px);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	vertical-align: middle;
+	white-space: nowrap;
+	width: calc(100% - 28px);
+}
+
+.low-pte-product-name,
+.low-pte-variation-name {
+	display: inline-block;
 	max-width: 100%;
-	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	vertical-align: middle;
+	white-space: nowrap;
+}
+
+.low-pte-product-cell:has(.low-pte-variation-count) .low-pte-product-name {
+	max-width: calc(100% - 6.75rem);
 }
 
 .low-pte-product-name {
@@ -197,11 +213,13 @@
 	background: #dcdcde;
 	border-radius: 999px;
 	color: #1d2327;
-	flex: 0 0 auto;
+	display: inline-block;
 	font-size: 11px;
 	font-weight: 400;
 	line-height: 1.5;
+	margin-left: 8px;
 	padding: 0 8px;
+	vertical-align: middle;
 	white-space: nowrap;
 }
 

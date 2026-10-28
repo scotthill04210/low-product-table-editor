@@ -561,7 +561,7 @@
 					element.classList.toggle('low-pte-variation-row', type === 'variation');
 				},
 				columns: [
-					column(t('columnProduct', 'Product'), 'name', 220, 2, true, productFormatter),
+					column(t('columnProduct', 'Product'), 'name', 360, 2, true, productFormatter),
 					column(t('columnSoldBy', 'Sold By'), 'sold_by', 120, 1, false, textFormatter),
 					column(t('columnRegularPrice', 'Regular price'), 'regular_price', 110, 1, false, textFormatter),
 					column(t('columnSalePrice', 'Sale price'), 'sale_price', 110, 1, false, textFormatter),
@@ -613,8 +613,15 @@
 		wrap.className = 'low-pte-product-cell';
 
 		var name = document.createElement('span');
-		name.className = data.type === 'variation' ? 'low-pte-variation-name' : 'low-pte-product-name';
-		name.textContent = data.name ? String(data.name) : '';
+		var isVariation = data.type === 'variation';
+		var text = isVariation
+			? (data.variation_label ? String(data.variation_label) : '')
+			: (data.name ? String(data.name) : '');
+		name.className = isVariation ? 'low-pte-variation-name' : 'low-pte-product-name';
+		name.textContent = text;
+		if (text) {
+			name.title = text;
+		}
 		wrap.appendChild(name);
 
 		if (data.type === 'variable') {

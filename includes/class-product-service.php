@@ -26,7 +26,7 @@ class Product_Service {
 	private static array $term_names = array();
 
 	/**
-	 * Attribute labels keyed by taxonomy or attribute slug.
+	 * Attribute labels keyed by parent ID and attribute slug.
 	 *
 	 * @var array<string, string>
 	 */
@@ -389,12 +389,15 @@ class Product_Service {
 		$is_variable  = $product->is_type( 'variable' );
 		$link         = get_edit_post_link( $product->get_id(), 'raw' );
 
+		$details = $this->variation_details( $product );
+
 		return array(
 			'id'                  => $product->get_id(),
 			'parent_id'           => $is_variation ? $product->get_parent_id() : 0,
 			'type'                => $product->get_type(),
-			'name'                => $product->get_name(),
-			'sold_by'             => $is_variation ? $this->sold_by( $product ) : '',
+			'name'                => $details['name'],
+			'variation_label'     => $details['variation_label'],
+			'sold_by'             => $details['sold_by'],
 			'regular_price'       => $this->price_value( $product, 'regular' ),
 			'sale_price'          => $this->price_value( $product, 'sale' ),
 			'manage_stock'        => $this->manage_stock_value( $product ),
@@ -504,23 +507,69 @@ class Product_Service {
 	}
 
 	/**
-	 * Sold By attribute, or every attribute value when that attribute is absent.
+	 * Parent title, Sold By value, and the other attribute values for one row.
+	 *
+	 * Sold By is matched by slug first (sold-by or pa_sold-by), then by label.
+	 * Other attribute values become variation_label. They are not copied into sold_by.
 	 *
 	 * @since 0.1.0
 	 *
-	 * @param \WC_Product $product Variation.
-	 * @return string
+	 * @param \WC_Product $product Product or variation.
+	 * @return array{name: string, sold_by: string, variation_label: string}
 	 */
-	private function sold_by( \WC_Product $product ): string {
+	private function variation_details( \WC_Product $product ): array {
 		if ( ! $product->is_type( 'variation' ) ) {
-			return '';
+			return array(
+				'name'            => $product->get_name(),
+				'sold_by'         => '',
+				'variation_label' => '',
+			);
 		}
+
+		$parent = wc_get_product( $product->get_parent_id() );
+		$name   = $parent instanceof \WC_Product ? $parent->get_name() : $product->get_name();
+		$empty  = array(
+			'name'            => $name,
+			'sold_by'         => '',
+			'variation_label' => '',
+		);
 
 		$attributes = $product->get_variation_attributes();
 		if ( ! is_array( $attributes ) || array() === $attributes ) {
-			return '';
+			return $empty;
 		}
 
+		$wanted  = strtolower( $this->sold_by_label() );
+		$sold_by = null;
+		$others  = array();
+
+		foreach ( $attributes as $key => $value ) {
+			$key     = (string) $key;
+			$display = $this->attribute_value_text( $key, is_scalar( $value ) ? (string) $value : '' );
+			$is_sold = $this->is_sold_by_slug( $key ) || strtolower( $this->attribute_label( $key, $product ) ) === $wanted;
+			if ( null === $sold_by && $is_sold ) {
+				$sold_by = $display;
+				continue;
+			}
+			if ( '' !== $display ) {
+				$others[] = $display;
+			}
+		}
+
+		$empty['sold_by']         = null === $sold_by ? '' : $sold_by;
+		$empty['variation_label'] = implode( ' / ', $others );
+
+		return $empty;
+	}
+
+	/**
+	 * Label used to recognize the Sold By attribute when the slug does not match.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @return string
+	 */
+	private function sold_by_label(): string {
 		/**
 		 * Filters the attribute label that fills the Sold By column.
 		 *
@@ -530,29 +579,24 @@ class Product_Service {
 		 */
 		$label = apply_filters( 'low_pte_sold_by_label', 'Sold By' );
 		if ( ! is_string( $label ) || '' === $label ) {
-			$label = 'Sold By';
+			return 'Sold By';
 		}
 
-		$wanted  = strtolower( $label );
-		$values  = array();
-		$sold_by = null;
+		return $label;
+	}
 
-		foreach ( $attributes as $key => $value ) {
-			$name    = $this->attribute_label( (string) $key );
-			$display = $this->attribute_value_text( (string) $key, is_scalar( $value ) ? (string) $value : '' );
-			if ( null === $sold_by && strtolower( $name ) === $wanted ) {
-				$sold_by = $display;
-			}
-			if ( '' !== $display ) {
-				$values[] = $display;
-			}
-		}
+	/**
+	 * Whether the attribute slug is the Sold By attribute.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @param string $key Attribute key from get_variation_attributes().
+	 * @return bool
+	 */
+	private function is_sold_by_slug( string $key ): bool {
+		$slug = strtolower( $this->attribute_taxonomy( $key ) );
 
-		if ( null !== $sold_by ) {
-			return $sold_by;
-		}
-
-		return implode( ' / ', $values );
+		return in_array( $slug, array( 'sold-by', 'pa_sold-by' ), true );
 	}
 
 	/**
@@ -583,23 +627,29 @@ class Product_Service {
 	/**
 	 * Human label for an attribute, cached for the request.
 	 *
+	 * The product is passed through so a custom attribute keeps the name that
+	 * was entered, such as "Sold By", instead of the slug "sold-by".
+	 *
 	 * @since 0.1.0
 	 *
-	 * @param string $key Attribute key.
+	 * @param string      $key     Attribute key.
+	 * @param \WC_Product $product Variation or parent product.
 	 * @return string
 	 */
-	private function attribute_label( string $key ): string {
-		$taxonomy = $this->attribute_taxonomy( $key );
-		if ( isset( self::$attribute_labels[ $taxonomy ] ) ) {
-			return self::$attribute_labels[ $taxonomy ];
+	private function attribute_label( string $key, \WC_Product $product ): string {
+		$taxonomy  = $this->attribute_taxonomy( $key );
+		$parent_id = $product->is_type( 'variation' ) ? $product->get_parent_id() : $product->get_id();
+		$cache_key = $parent_id . ':' . $taxonomy;
+		if ( isset( self::$attribute_labels[ $cache_key ] ) ) {
+			return self::$attribute_labels[ $cache_key ];
 		}
 
-		$label = function_exists( 'wc_attribute_label' ) ? wc_attribute_label( $taxonomy ) : $taxonomy;
+		$label = function_exists( 'wc_attribute_label' ) ? wc_attribute_label( $taxonomy, $product ) : $taxonomy;
 		if ( ! is_string( $label ) || '' === $label ) {
 			$label = $taxonomy;
 		}
 
-		self::$attribute_labels[ $taxonomy ] = $label;
+		self::$attribute_labels[ $cache_key ] = $label;
 
 		return $label;
 	}
