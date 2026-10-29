@@ -2,7 +2,7 @@
 
 Admin-only WordPress plugin that edits WooCommerce products and variations in one spreadsheet-style table.
 
-**1.0.0** is the current release. It adds the product grid, inline editing, the audit log, bulk price changes, conflict-safe undo, and keyboard access. The 0.1.1 zip has the scaffold and GitHub updates only.
+**1.1.0** is the current release. It adds CSV import and export matched on SKU, with preview and undo. Earlier 1.0.0 covers the product grid, inline editing, the audit log, bulk price changes, conflict-safe undo, and keyboard access.
 
 ## Product grid
 
@@ -15,6 +15,10 @@ The History tab lists each Save as one batch. Open a batch to see the old and ne
 ## Bulk prices
 
 Select simple products or variations, then choose Bulk price action. Preview shows the new price for every item before anything is saved. Apply sends the selected items in groups of 25. Increase and decrease skip an empty price and list it in the report. A result below zero, a regular price of zero, or a sale price that is not below the regular price is reported as an error and is not saved.
+
+## Import and export
+
+The Import / Export tab downloads a CSV of the catalog and imports an edited file matched on SKU. Import never creates or deletes products. A preview lists every change before apply. Successful imports are logged and can be undone. Column rules and Excel notes are in [docs/IMPORT-EXPORT.md](docs/IMPORT-EXPORT.md).
 
 ## Requirements
 

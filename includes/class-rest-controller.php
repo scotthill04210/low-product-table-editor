@@ -174,6 +174,95 @@ class Rest_Controller {
 				'permission_callback' => array( $this, 'permissions_check' ),
 			)
 		);
+
+		register_rest_route(
+			'low-pte/v1',
+			'/import/preview',
+			array(
+				'methods'             => 'POST',
+				'callback'            => array( $this, 'preview_import' ),
+				'permission_callback' => array( $this, 'permissions_check' ),
+			)
+		);
+
+		register_rest_route(
+			'low-pte/v1',
+			'/import/apply',
+			array(
+				'methods'             => 'POST',
+				'callback'            => array( $this, 'apply_import' ),
+				'permission_callback' => array( $this, 'permissions_check' ),
+			)
+		);
+	}
+
+	/**
+	 * Preview a CSV import without writing.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function preview_import( \WP_REST_Request $request ): \WP_REST_Response|\WP_Error {
+		$files = $request->get_file_params();
+		$file  = isset( $files['file'] ) && is_array( $files['file'] ) ? $files['file'] : array();
+		$tmp   = isset( $file['tmp_name'] ) ? (string) $file['tmp_name'] : '';
+		$name  = isset( $file['name'] ) ? (string) $file['name'] : '';
+		if ( '' === $tmp || ! is_uploaded_file( $tmp ) ) {
+			return new \WP_Error(
+				'low_pte_import_file',
+				__( 'Choose a CSV file to preview.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$skip    = $request->get_param( 'skip_changed_since_export' );
+		$clear   = $request->get_param( 'allow_clear' );
+		$service = new Import_Export_Service( $this->products );
+		$result  = $service->preview_file(
+			$tmp,
+			$name,
+			array(
+				'skip_changed_since_export' => ! in_array( (string) $skip, array( '0', 'false' ), true ),
+				'allow_clear'               => in_array( (string) $clear, array( '1', 'true' ), true ),
+			)
+		);
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return rest_ensure_response( $result );
+	}
+
+	/**
+	 * Apply one chunk of a previewed import.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function apply_import( \WP_REST_Request $request ): \WP_REST_Response|\WP_Error {
+		$body = $request->get_json_params();
+		if ( ! is_array( $body ) ) {
+			return new \WP_Error( 'rest_invalid_param', __( 'The import request was not valid.', 'low-product-table-editor' ), array( 'status' => 400 ) );
+		}
+
+		$token = isset( $body['token'] ) ? (string) $body['token'] : '';
+		$batch = isset( $body['batch_id'] ) ? strtolower( (string) $body['batch_id'] ) : '';
+		$index = isset( $body['chunk_index'] ) ? (int) $body['chunk_index'] : -1;
+		if ( ! $this->validate_batch_id( $batch ) || $index < 0 ) {
+			return new \WP_Error( 'rest_invalid_param', __( 'The import request was not valid.', 'low-product-table-editor' ), array( 'status' => 400 ) );
+		}
+
+		$service = new Import_Export_Service( $this->products );
+		$result  = $service->apply_chunk( $token, $batch, $index );
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return rest_ensure_response( $result );
 	}
 
 	/**
@@ -383,12 +472,23 @@ class Rest_Controller {
 		$product = $request->get_param( 'product' );
 		$product = is_scalar( $product ) ? trim( (string) $product ) : '';
 
+		$source = $request->get_param( 'source' );
+		$source = is_string( $source ) ? $source : '';
+		if ( ! in_array( $source, array( '', 'inline', 'bulk', 'import', 'undo' ), true ) ) {
+			return new \WP_Error(
+				'rest_invalid_param',
+				__( 'That history source is not valid.', 'low-product-table-editor' ),
+				array( 'status' => 400 )
+			);
+		}
+
 		$filters = array(
 			'user_id'   => $user_id,
 			'date_from' => $date_from,
 			'date_to'   => $date_to,
 			'page'      => $page,
 			'per_page'  => $per_page,
+			'source'    => $source,
 		);
 
 		if ( '' !== $product ) {

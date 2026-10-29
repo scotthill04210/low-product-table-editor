@@ -111,12 +111,12 @@ class Log_Repository {
 	 *
 	 * @param string            $batch_id Batch identifier.
 	 * @param int               $user_id  User who made the change.
-	 * @param string            $source   inline, bulk, or undo.
+	 * @param string            $source   inline, bulk, import, or undo.
 	 * @param array<int, mixed> $entries  Rows with product_id, parent_id, field, old, and new.
 	 * @return bool
 	 */
 	public function insert_entries( string $batch_id, int $user_id, string $source, array $entries ): bool {
-		if ( ! in_array( $source, array( 'inline', 'bulk', 'undo' ), true ) || array() === $entries ) {
+		if ( ! in_array( $source, array( 'inline', 'bulk', 'undo', 'import' ), true ) || array() === $entries ) {
 			return false;
 		}
 
@@ -397,6 +397,12 @@ class Log_Repository {
 			foreach ( $product_ids as $product_id ) {
 				$args[] = $product_id;
 			}
+		}
+
+		$source = isset( $filters['source'] ) && is_string( $filters['source'] ) ? $filters['source'] : '';
+		if ( in_array( $source, array( 'inline', 'bulk', 'import', 'undo' ), true ) ) {
+			$sql[]  = 'source = %s';
+			$args[] = $source;
 		}
 
 		if ( isset( $filters['date_from'] ) && is_string( $filters['date_from'] ) && '' !== $filters['date_from'] ) {

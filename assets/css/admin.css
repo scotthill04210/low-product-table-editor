@@ -469,6 +469,74 @@
 	width: 1px;
 }
 
+.low-pte-import-grid {
+	display: grid;
+	gap: 16px;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.low-pte-card {
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	padding: 16px;
+}
+
+.low-pte-drop {
+	border: 1px dashed #2271b1;
+	margin-bottom: 12px;
+	padding: 16px;
+	text-align: center;
+}
+
+.low-pte-file-input {
+	border: 0;
+	clip: rect(1px, 1px, 1px, 1px);
+	clip-path: inset(50%);
+	height: 1px;
+	margin: -1px;
+	overflow: hidden;
+	padding: 0;
+	position: absolute;
+	width: 1px;
+}
+
+.low-pte-check {
+	display: block;
+	margin: 8px 0;
+}
+
+.low-pte-import-summary,
+.low-pte-import-actions {
+	margin: 12px 0;
+}
+
+.low-pte-progress {
+	background: #dcdcde;
+	height: 12px;
+	margin: 12px 0;
+}
+
+.low-pte-progress span {
+	background: #2271b1;
+	display: block;
+	height: 100%;
+	width: 0;
+}
+
+.low-pte-problem td:last-child::before {
+	content: "! ";
+	font-weight: 700;
+}
+
+.low-pte-live {
+	clip: rect(1px, 1px, 1px, 1px);
+	clip-path: inset(50%);
+	height: 1px;
+	overflow: hidden;
+	position: absolute;
+	width: 1px;
+}
+
 .low-pte-shortcuts {
 	margin: 0;
 	padding-left: 18px;

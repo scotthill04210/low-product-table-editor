@@ -241,7 +241,7 @@ class Product_Service {
 	 * @since 0.1.1
 	 *
 	 * @param string            $batch_id Batch identifier.
-	 * @param string            $source   inline, bulk, or undo.
+	 * @param string            $source   inline, bulk, import, or undo.
 	 * @param array<int, mixed> $entries  Changed fields.
 	 * @return bool
 	 */
@@ -1376,7 +1376,25 @@ class Product_Service {
 			);
 		}
 
-		$raw = trim( (string) $value );
+		$raw = trim( str_replace( "\xC2\xA0", '', (string) $value ) );
+		if ( str_contains( $raw, ',' ) ) {
+			return array(
+				'message' => __( 'Use a dot for decimals, no thousands separators.', 'low-product-table-editor' ),
+			);
+		}
+
+		if ( preg_match( '/[eE]/', $raw ) ) {
+			return array(
+				'message' => __( 'Use a plain number, not scientific notation.', 'low-product-table-editor' ),
+			);
+		}
+
+		if ( str_starts_with( $raw, '-' ) ) {
+			return array(
+				'message' => __( 'Prices cannot be negative.', 'low-product-table-editor' ),
+			);
+		}
+
 		if ( '' === $raw ) {
 			if ( $allow_empty ) {
 				return array(
@@ -1644,6 +1662,12 @@ class Product_Service {
 	 * @return array{value?: int, message?: string}
 	 */
 	private function validate_stock_quantity( \WC_Product $product, mixed $value, array $fields ): array {
+		if ( null === $value || ( is_string( $value ) && '' === trim( $value ) ) ) {
+			return array(
+				'value' => null,
+			);
+		}
+
 		if ( true !== $this->resulting_manage_stock( $product, $fields ) ) {
 			return array(
 				'message' => __( 'Stock quantity can only be set when stock is managed.', 'low-product-table-editor' ),
@@ -1958,7 +1982,7 @@ class Product_Service {
 				$product->set_manage_stock( $value );
 				break;
 			case 'stock_quantity':
-				$product->set_stock_quantity( (int) $value );
+				$product->set_stock_quantity( null === $value || '' === $value ? null : (int) $value );
 				break;
 			case 'stock_status':
 				$product->set_stock_status( (string) $value );
@@ -2743,6 +2767,156 @@ class Product_Service {
 			'expected'   => $expected,
 			'current'    => $current,
 		);
+	}
+
+	/**
+	 * Validate fields with the same rules as a table save.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param \WC_Product          $product Product or variation.
+	 * @param array<string, mixed> $fields  Requested fields.
+	 * @return array{errors: array<string, string>, values: array<string, mixed>}
+	 */
+	public function validate_import_fields( \WC_Product $product, array $fields ): array {
+		return $this->validate_fields( $product, $fields );
+	}
+
+	/**
+	 * Whether the stored field already equals the next value.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @param string      $field   Field name.
+	 * @param mixed       $next    Next value.
+	 * @return bool
+	 */
+	public function field_is_same( \WC_Product $product, string $field, mixed $next ): bool {
+		return $this->field_matches( $field, $this->current_field( $product, $field ), $next );
+	}
+
+	/**
+	 * Audit-log form of the stored field.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @param string      $field   Field name.
+	 * @return string|null
+	 */
+	public function logged_field( \WC_Product $product, string $field ): ?string {
+		return $this->log_value( $field, $this->current_field( $product, $field ) );
+	}
+
+	/**
+	 * Unix timestamp used for conflict checks.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @return int
+	 */
+	public function modified_unix( \WC_Product $product ): int {
+		return $this->modified_timestamp( $product );
+	}
+
+	/**
+	 * Field names the table editor can save for this product.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param \WC_Product $product Product or variation.
+	 * @return array<int, string>
+	 */
+	public function editable_field_names( \WC_Product $product ): array {
+		return $this->editable_fields( $product );
+	}
+
+	/**
+	 * Save already validated fields and return audit rows.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int                  $id     Product or variation ID.
+	 * @param array<string, mixed> $values Validated field values.
+	 * @return array{status: string, message: string, entries: array<int, array<string, mixed>>, parent_id: int}
+	 */
+	public function commit_import_fields( int $id, array $values ): array {
+		$empty = static function ( string $message ): array {
+			return array(
+				'status'    => 'error',
+				'message'   => $message,
+				'entries'   => array(),
+				'parent_id' => 0,
+			);
+		};
+
+		$product = $this->reload_product( $id );
+		if ( ! $product instanceof \WC_Product || ! $this->is_supported_product( $product ) ) {
+			return $empty( __( 'Product not found.', 'low-product-table-editor' ) );
+		}
+
+		$before = array();
+		foreach ( array_keys( $values ) as $field_name ) {
+			$before[ $field_name ] = $this->log_value( $field_name, $this->current_field( $product, $field_name ) );
+		}
+
+		try {
+			$changed = $this->apply_fields( $product, $values );
+			if ( $changed ) {
+				$this->save_product( $product );
+			}
+		} catch ( \WC_Data_Exception $exception ) {
+			return $empty( $exception->getMessage() );
+		} catch ( \Throwable $exception ) {
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Logged only while WP_DEBUG is on.
+				error_log( 'LOW Product Table Editor: ' . $exception->getMessage() );
+			}
+
+			return $empty( __( 'The changes could not be saved.', 'low-product-table-editor' ) );
+		}
+
+		$fresh     = $this->reload_product( $id );
+		$source    = $fresh instanceof \WC_Product ? $fresh : $product;
+		$parent_id = $source->is_type( 'variation' ) ? $source->get_parent_id() : ( $source->is_type( 'variable' ) ? $source->get_id() : 0 );
+		$entries   = array();
+
+		if ( $changed ) {
+			foreach ( $before as $field_name => $old_value ) {
+				$new_value = $this->log_value( $field_name, $this->current_field( $source, $field_name ) );
+				if ( $old_value === $new_value ) {
+					continue;
+				}
+				$entries[] = array(
+					'product_id' => $id,
+					'parent_id'  => $source->is_type( 'variation' ) ? $source->get_parent_id() : 0,
+					'field'      => $field_name,
+					'old'        => $old_value,
+					'new'        => $new_value,
+				);
+			}
+		}
+
+		return array(
+			'status'    => 'ok',
+			'message'   => '',
+			'entries'   => $entries,
+			'parent_id' => $parent_id,
+		);
+	}
+
+	/**
+	 * Sync each variable parent once and restore menu order.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param array<int, int> $parent_ids Parent product IDs.
+	 * @return void
+	 */
+	public function sync_variable_parents( array $parent_ids ): void {
+		$this->sync_undone_parents( $parent_ids );
 	}
 
 	/**

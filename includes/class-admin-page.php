@@ -36,6 +36,7 @@ class Admin_Page {
 		add_action( 'admin_menu', array( $this, 'register_menu' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue' ) );
 		add_action( 'admin_post_low_pte_save_settings', array( $this, 'save_settings' ) );
+		add_action( 'admin_post_low_pte_export', array( $this, 'export_csv' ) );
 	}
 
 	/**
@@ -107,6 +108,9 @@ class Admin_Page {
 				<button type="button" class="low-pte-tab" role="tab" id="low-pte-tab-history" aria-selected="false" aria-controls="low-pte-history">
 					<?php esc_html_e( 'History', 'low-product-table-editor' ); ?>
 				</button>
+				<button type="button" class="low-pte-tab" role="tab" id="low-pte-tab-import" aria-selected="false" aria-controls="low-pte-import">
+					<?php esc_html_e( 'Import / Export', 'low-product-table-editor' ); ?>
+				</button>
 			</div>
 			<div id="low-pte-app" class="low-pte-app" aria-live="polite">
 				<p class="low-pte-loading"><?php esc_html_e( 'Loading editor...', 'low-product-table-editor' ); ?></p>
@@ -168,6 +172,14 @@ class Admin_Page {
 			LOW_PTE_URL . 'assets/js/bulk.js',
 			array( 'low-pte-app' ),
 			$this->asset_version( 'assets/js/bulk.js' ),
+			true
+		);
+
+		wp_enqueue_script(
+			'low-pte-import',
+			LOW_PTE_URL . 'assets/js/import-export.js',
+			array( 'low-pte-app' ),
+			$this->asset_version( 'assets/js/import-export.js' ),
 			true
 		);
 
@@ -256,6 +268,76 @@ class Admin_Page {
 	}
 
 	/**
+	 * Stream a CSV export of the catalog.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function export_csv(): void {
+		if ( ! current_user_can( 'manage_woocommerce' ) ) { // phpcs:ignore WordPress.WP.Capabilities.Unknown -- WooCommerce capability.
+			wp_die(
+				esc_html__( 'Sorry, you are not allowed to access this page.', 'low-product-table-editor' ),
+				esc_html__( 'Not allowed', 'low-product-table-editor' ),
+				array( 'response' => 403 )
+			);
+		}
+
+		check_admin_referer( 'low_pte_export' );
+
+		$scope = isset( $_POST['scope'] ) ? sanitize_key( wp_unslash( (string) $_POST['scope'] ) ) : 'all';
+		if ( ! in_array( $scope, array( 'all', 'filters', 'selection' ), true ) ) {
+			$scope = 'all';
+		}
+
+		$filters = array();
+		foreach ( array( 'search', 'category', 'type', 'stock_status', 'status' ) as $key ) {
+			if ( ! isset( $_POST[ $key ] ) ) {
+				continue;
+			}
+			$filters[ $key ] = sanitize_text_field( wp_unslash( (string) $_POST[ $key ] ) );
+		}
+
+		$ids = array();
+		if ( isset( $_POST['ids'] ) ) {
+			$raw_ids = sanitize_text_field( wp_unslash( (string) $_POST['ids'] ) );
+			$ids     = array_slice( array_filter( array_map( 'absint', explode( ',', $raw_ids ) ) ), 0, 5000 );
+		}
+
+		$descriptions = isset( $_POST['include_descriptions'] ) && '1' === sanitize_text_field( wp_unslash( (string) $_POST['include_descriptions'] ) );
+		$service      = new Import_Export_Service( new Product_Service() );
+		$columns      = $service->export_columns( $descriptions );
+
+		nocache_headers();
+		header( 'Content-Type: text/csv; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="low-pte-export-' . gmdate( 'Ymd-Hi' ) . '.csv"' );
+		header( 'Cache-Control: no-store' );
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Streaming the CSV to the browser.
+		$output = fopen( 'php://output', 'wb' );
+		if ( false === $output ) {
+			wp_die( esc_html__( 'The export could not be started.', 'low-product-table-editor' ) );
+		}
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Streaming the UTF-8 BOM to the browser.
+		fwrite( $output, "\xEF\xBB\xBF" );
+		fputcsv( $output, $columns );
+		foreach ( $service->export_rows(
+			array(
+				'scope'                => $scope,
+				'filters'              => $filters,
+				'ids'                  => $ids,
+				'include_descriptions' => $descriptions,
+			)
+		) as $row ) {
+			fputcsv( $output, $row );
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Closing the browser stream.
+		fclose( $output );
+		exit;
+	}
+
+	/**
 	 * Save retention and uninstall options, then return to History.
 	 *
 	 * @since 0.1.1
@@ -323,6 +405,7 @@ class Admin_Page {
 			'settings'       => array(
 				'actionUrl'     => admin_url( 'admin-post.php' ),
 				'nonce'         => wp_create_nonce( 'low_pte_save_settings' ),
+				'exportNonce'   => wp_create_nonce( 'low_pte_export' ),
 				'retentionDays' => $retention,
 				'deleteData'    => 'yes' === get_option( 'low_pte_delete_data_on_uninstall', 'no' ),
 			),
@@ -347,7 +430,31 @@ class Admin_Page {
 				'logLoading'            => __( 'Loading history...', 'low-product-table-editor' ),
 				'sourceInline'          => __( 'Inline', 'low-product-table-editor' ),
 				'sourceBulk'            => __( 'Bulk', 'low-product-table-editor' ),
+				'sourceImport'          => __( 'Import', 'low-product-table-editor' ),
 				'sourceUndo'            => __( 'Undo', 'low-product-table-editor' ),
+				'allSources'            => __( 'All sources', 'low-product-table-editor' ),
+				'importExport'          => __( 'Import / Export', 'low-product-table-editor' ),
+				'exportTitle'           => __( 'Export', 'low-product-table-editor' ),
+				'importTitle'           => __( 'Import', 'low-product-table-editor' ),
+				'exportScope'           => __( 'Rows', 'low-product-table-editor' ),
+				'exportAll'             => __( 'Everything', 'low-product-table-editor' ),
+				'exportFilters'         => __( 'Current table filters', 'low-product-table-editor' ),
+				'exportSelection'       => __( 'Currently selected rows', 'low-product-table-editor' ),
+				'includeDescriptions'   => __( 'Include descriptions', 'low-product-table-editor' ),
+				'downloadExport'        => __( 'Download export', 'low-product-table-editor' ),
+				'chooseFile'            => __( 'Choose file', 'low-product-table-editor' ),
+				'dropFile'              => __( 'Drop a CSV file here, or choose a file.', 'low-product-table-editor' ),
+				'skipChanged'           => __( 'Skip rows changed since export', 'low-product-table-editor' ),
+				'allowClear'            => __( 'Allow clearing values', 'low-product-table-editor' ),
+				'previewImport'         => __( 'Preview import', 'low-product-table-editor' ),
+				// translators: 1: number of cell changes, 2: number of products.
+				'applyChanges'          => __( 'Apply %1$s changes to %2$s items', 'low-product-table-editor' ),
+				// translators: %s: number of items that will change.
+				'confirmItems'          => __( 'I understand this will change %s items.', 'low-product-table-editor' ),
+				// translators: %s: number of values that will be cleared.
+				'confirmClears'         => __( 'This file clears %s values.', 'low-product-table-editor' ),
+				'downloadProblems'      => __( 'Download problems as CSV', 'low-product-table-editor' ),
+				'importPreviewTitle'    => __( 'Import preview', 'low-product-table-editor' ),
 				'allUsers'              => __( 'All users', 'low-product-table-editor' ),
 				'user'                  => __( 'User', 'low-product-table-editor' ),
 				'product'               => __( 'Product', 'low-product-table-editor' ),

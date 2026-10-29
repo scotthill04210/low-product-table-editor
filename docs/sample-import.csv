@@ -1,0 +1,7 @@
+sku,type,parent_sku,name,variation_label,sold_by,regular_price,sale_price,manage_stock,stock_quantity,stock_status,weight,status,catalog_visibility,modified,id
+IFB-SOFT-01,variable,,IFB Soft Brick,,,,,,,publish,visible,0,103
+IFB-SOFT-01-CASE,variation,IFB-SOFT-01,IFB Soft Brick,,Case,63.00,,no,,instock,,,0,106
+IFB-SOFT-01-EACH,variation,IFB-SOFT-01,IFB Soft Brick,,Each,7,,no,,instock,,,0,107
+FWT-1000-18,variable,,Fiberglass Wrap Tape,,,,,,,publish,visible,0,135
+FWT-1000-18-FT,variation,FWT-1000-18,Fiberglass Wrap Tape,18 in,Foot,0.3299,,no,,instock,,,0,184
+CGK-2192,variable,,Ceramic Fiber Blanket,,,,,,,publish,visible,0,132

@@ -155,7 +155,8 @@
 			status: oneOf(params.get('status'), ['publish', 'draft', 'private', 'pending']),
 			page: Number.isFinite(pageValue) && pageValue > 0 ? pageValue : 1,
 			per_page: perPageOptions.indexOf(perPageValue) !== -1 ? perPageValue : defaultPerPage,
-			tab: params.get('tab') === 'history' ? 'history' : 'table',
+			tab: params.get('tab') === 'history' || params.get('tab') === 'importexport' ? params.get('tab') : 'table',
+			log_source: oneOf(params.get('log_source'), ['inline', 'bulk', 'import', 'undo']),
 			log_user: (params.get('log_user') || '').replace(/\D/g, ''),
 			log_product: (params.get('log_product') || '').slice(0, 100),
 			log_from: dateParam(params.get('log_from')),
@@ -174,7 +175,7 @@
 	}
 
 	function historyFiltersChanged(left, right) {
-		return left.log_user !== right.log_user || left.log_product !== right.log_product || left.log_from !== right.log_from || left.log_to !== right.log_to || left.log_page !== right.log_page || left.log_per_page !== right.log_per_page;
+		return left.log_user !== right.log_user || left.log_source !== right.log_source || left.log_product !== right.log_product || left.log_from !== right.log_from || left.log_to !== right.log_to || left.log_page !== right.log_page || left.log_per_page !== right.log_per_page;
 	}
 
 	function oneOf(value, allowed) {
@@ -183,7 +184,7 @@
 
 	function writeUrl(mode) {
 		var next = new URLSearchParams(window.location.search);
-		['search', 'category', 'type', 'stock_status', 'status', 'per_page', 'paged', 'tab', 'log_user', 'log_product', 'log_from', 'log_to', 'log_page', 'log_per_page'].forEach(function (key) {
+		['search', 'category', 'type', 'stock_status', 'status', 'per_page', 'paged', 'tab', 'log_user', 'log_source', 'log_product', 'log_from', 'log_to', 'log_page', 'log_per_page'].forEach(function (key) {
 			next.delete(key);
 		});
 
@@ -208,8 +209,11 @@
 		if (state.page > 1) {
 			next.set('paged', String(state.page));
 		}
-		if (state.tab === 'history') {
-			next.set('tab', 'history');
+		if (state.tab === 'history' || state.tab === 'importexport') {
+			next.set('tab', state.tab);
+		}
+		if (state.log_source) {
+			next.set('log_source', state.log_source);
 		}
 		if (state.log_user) {
 			next.set('log_user', state.log_user);
@@ -2945,6 +2949,7 @@
 	}
 
 	var historyUserSelect;
+	var historySourceSelect;
 	var historyProductInput;
 	var historyFromInput;
 	var historyToInput;
@@ -2966,10 +2971,16 @@
 				selectTab('history');
 			});
 		}
+		var importTab = document.getElementById('low-pte-tab-import');
+		if (importTab) {
+			importTab.addEventListener('click', function () {
+				selectTab('importexport');
+			});
+		}
 	}
 
 	function selectTab(tab) {
-		var next = tab === 'history' ? 'history' : 'table';
+		var next = tab === 'history' || tab === 'importexport' ? tab : 'table';
 		if (next === state.tab) {
 			return;
 		}
@@ -2983,21 +2994,31 @@
 
 	function applyTab() {
 		var history = state.tab === 'history';
+		var importing = state.tab === 'importexport';
 		if (tablePanel) {
-			tablePanel.hidden = history;
+			tablePanel.hidden = history || importing;
 		}
 		if (historyPanel) {
 			historyPanel.hidden = !history;
 		}
+		var importPanel = document.getElementById('low-pte-import');
+		if (importPanel) {
+			importPanel.hidden = !importing;
+		}
 		var tableTab = document.getElementById('low-pte-tab-table');
 		var historyTab = document.getElementById('low-pte-tab-history');
+		var importTab = document.getElementById('low-pte-tab-import');
 		if (tableTab) {
-			tableTab.classList.toggle('low-pte-tab-active', !history);
-			tableTab.setAttribute('aria-selected', history ? 'false' : 'true');
+			tableTab.classList.toggle('low-pte-tab-active', !history && !importing);
+			tableTab.setAttribute('aria-selected', !history && !importing ? 'true' : 'false');
 		}
 		if (historyTab) {
 			historyTab.classList.toggle('low-pte-tab-active', history);
 			historyTab.setAttribute('aria-selected', history ? 'true' : 'false');
+		}
+		if (importTab) {
+			importTab.classList.toggle('low-pte-tab-active', importing);
+			importTab.setAttribute('aria-selected', importing ? 'true' : 'false');
 		}
 	}
 
@@ -3018,6 +3039,27 @@
 			loadHistory();
 		});
 		toolbar.appendChild(field(t('user', 'User'), historyUserSelect));
+
+		historySourceSelect = document.createElement('select');
+		[
+			['', t('allSources', 'All sources')],
+			['inline', t('sourceInline', 'Inline')],
+			['bulk', t('sourceBulk', 'Bulk')],
+			['import', t('sourceImport', 'Import')],
+			['undo', t('sourceUndo', 'Undo')]
+		].forEach(function (option) {
+			var item = document.createElement('option');
+			item.value = option[0];
+			item.textContent = option[1];
+			historySourceSelect.appendChild(item);
+		});
+		historySourceSelect.addEventListener('change', function () {
+			state.log_source = historySourceSelect.value;
+			state.log_page = 1;
+			writeUrl('push');
+			loadHistory();
+		});
+		toolbar.appendChild(field(t('logSource', 'Source'), historySourceSelect));
 
 		historyProductInput = document.createElement('input');
 		historyProductInput.type = 'search';
@@ -3105,6 +3147,9 @@
 			return;
 		}
 		historyProductInput.value = state.log_product;
+		if (historySourceSelect) {
+			historySourceSelect.value = state.log_source;
+		}
 		historyFromInput.value = state.log_from;
 		historyToInput.value = state.log_to;
 		historyPerPageSelect.value = String(state.log_per_page);
@@ -3172,6 +3217,7 @@
 		historyList.textContent = '';
 		fetchLog({
 			user: state.log_user,
+			source: state.log_source,
 			product: state.log_product,
 			date_from: state.log_from,
 			date_to: state.log_to,
@@ -3801,6 +3847,9 @@
 		if (source === 'bulk') {
 			return t('sourceBulk', 'Bulk');
 		}
+		if (source === 'import') {
+			return t('sourceImport', 'Import');
+		}
 		if (source === 'undo') {
 			return t('sourceUndo', 'Undo');
 		}
@@ -3852,6 +3901,8 @@
 		reload: function () {
 			load();
 		},
+		fieldLabel: fieldLabel,
+		refreshTab: applyTab,
 		toast: showToast,
 		requestUndo: requestUndo,
 		trapModal: trapModal

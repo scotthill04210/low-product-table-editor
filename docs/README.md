@@ -1,6 +1,6 @@
 # LOW Product Table Editor: Cursor Prompts
 
-Current release: **1.0.0**. Phases 1 through 8 are in that release. The 0.1.1 zip has the scaffold and the GitHub updater only. See `docs/TESTING.md` for the QA script and `docs/CHANGELOG.md` for the release notes.
+Current release: **1.1.0**. Phases 1 through 9 Stage 1 (CSV import and export) are built. Stage 2 (.xlsx) waits for confirmation. See `docs/IMPORT-EXPORT.md`, `docs/TESTING.md`, and `docs/CHANGELOG.md`.
 
 Each file in this folder is one self-contained Cursor prompt. Paste the whole file into Cursor, one phase at a time. Do not start a phase until the previous one passes its acceptance checks.
 
@@ -15,6 +15,8 @@ Each file in this folder is one self-contained Cursor prompt. Paste the whole fi
 | phase-7-polish-qa.md | 7 | Keyboard and a11y, empty and error states, load test, uninstall |
 
 | phase-8-github-updater.md | Any time after 1 | Updates from GitHub Releases (scotthill04210/low-product-table-editor), "Check for updates" link on the Plugins screen row, release workflow |
+
+| phase-9-import-export.md | After 7 (adds 1.1.0) | CSV export and import matched on SKU with preview, chunked apply, logging, undo. Stage 2 adds .xlsx |
 
 Run the updater prompt right after Phase 1 so every later build can be installed through WordPress. It adds `includes/class-updater.php`, `.github/workflows/release.yml`, `.distignore`, and `docs/RELEASING.md` to the file structure.
 

@@ -95,5 +95,12 @@ class Installer {
 
 		$repository = new Log_Repository();
 		$repository->purge_older_than( $days );
+
+		global $wpdb;
+
+		$like    = $wpdb->esc_like( '_transient_low_pte_import_' ) . '%';
+		$timeout = $wpdb->esc_like( '_transient_timeout_low_pte_import_' ) . '%';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Daily cleanup of import preview transients.
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s", $like, $timeout ) );
 	}
 }

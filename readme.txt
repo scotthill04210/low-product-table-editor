@@ -3,13 +3,13 @@ Contributors: scotthill
 Requires at least: 6.4
 Tested up to: 6.8
 Requires PHP: 8.1
-Stable tag: 1.0.0
+Stable tag: 1.1.0
 
 Edit WooCommerce products and variations in one spreadsheet-style table.
 
 == Description ==
 
-Shop managers edit regular prices, sale prices, stock, SKUs, names, visibility, status, and descriptions for every product and variation in one table. Saves are logged and can be undone. A bulk price action previews a change before it writes.
+Shop managers edit regular prices, sale prices, stock, SKUs, names, visibility, status, and descriptions for every product and variation in one table. Saves are logged and can be undone. A bulk price action previews a change before it writes. The Import / Export tab downloads a CSV and imports edited rows matched on SKU, with a preview and undo.
 
 Prices are stored with up to 4 decimal places. The shop display still uses WooCommerce's Number of Decimals setting.
 
@@ -30,6 +30,9 @@ No. Undo restores a value only when it still matches the logged edit. Anything c
 Bypass cache for `/wp-admin/*`, `/wp-json/low-pte/*`, and URLs that use `?rest_route=`.
 
 == Changelog ==
+
+= 1.1.0 =
+* CSV export and import matched on SKU, with preview, chunked apply, logging, and undo.
 
 = 1.0.0 =
 * Spreadsheet editing, audit log, bulk price changes, and conflict-safe undo.

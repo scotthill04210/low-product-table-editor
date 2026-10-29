@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+* CSV export and import matched on SKU.
+* Preview, chunked apply, audit log source Import, and undo for import batches.
+
 ## 1.0.0
 
 * Edit products and variations in one table, including 4-decimal prices and Sold By.
